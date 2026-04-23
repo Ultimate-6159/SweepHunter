@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Data / runtime artifacts (ห้าม commit ข้อมูล trade + model + log)
+data/
+*.sqlite
+*.sqlite-journal
+*.pkl
+*.log
+recovery_state.json
+
+# Secrets — ห้าม push login MT5
+config.json
+config.local.json
+.env
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS
+Thumbs.db
+.DS_Store
