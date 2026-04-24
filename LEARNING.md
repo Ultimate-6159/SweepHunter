@@ -770,6 +770,236 @@ class TradingLSTM(nn.Module):
 
 ---
 
+# 🆕 Module Updates V2 — Anti-Bias & Robustness
+
+## 1️⃣ Multi-Timeframe Features (MTF)
+
+### ปัญหาที่แก้
+M5 มองสั้น → ไม่เห็น context ใหญ่ → entry ตรงข้าม trend M15/H1
+
+### สูตร
+```python
+# resample base TF เป็น HTF (M5 → M15 = multiplier 3 | M5 → H1 = multiplier 12)
+htf_open  = first per N bars
+htf_high  = max per N bars
+htf_low   = min per N bars
+htf_close = last per N bars
+
+# คำนวณ EMA20 + ATR14 + RSI14 บน HTF แล้ว forward-fill กลับ base TF
+htf_trend_dir   = sign((close - ema20) / atr)        # +1 / 0 / -1
+htf_ema_dist    = (close - ema20) / atr              # signed distance
+htf_rsi_norm    = rsi/100 - 0.5                      # centered around 0
+```
+
+### Features (6 ตัว)
+| Column | Range | ตีความ |
+|---|---|---|
+| `htf1_trend_dir` | -1, 0, +1 | ทิศ trend M15 |
+| `htf1_ema_dist_atr` | ~-3.0 ถึง +3.0 | ห่าง EMA M15 กี่ ATR |
+| `htf1_rsi_norm` | -0.5 ถึง +0.5 | RSI M15 (centered) |
+| `htf2_*` | (เหมือนกัน) | สำหรับ H1 |
+
+### ทำไม robust?
+- ใช้ data ที่มีอยู่แล้ว (M5) — ไม่ต้องดึง MT5 ซ้ำ
+- Auto-adapt ตาม base TF ใน config (`trading.timeframe`)
+
+---
+
+## 2️⃣ Symmetric Pattern Features (10 ตัว)
+
+### ปัญหาที่แก้
+Features เก่าหลายตัว **bias ไปทางใดทางหนึ่ง** เช่น `ema_dist_atr` ในตลาด uptrend จะเป็นบวกมาก → model เรียนว่า "บวก = BUY ดี" → biased
+
+### กลยุทธ์: ทุก feature symmetric
+ทำงาน **เท่ากัน** สำหรับ BUY และ SELL — model ไม่มีเหตุผลที่จะ bias
+
+| Feature | ตรวจอะไร | คล้าย Pattern อะไร |
+|---|---|---|
+| `pat_engulf_bull/bear` | bull/bear engulfing | Reversal signal |
+| `pat_pinbar_top/bot_5` | wick rejection 5 bars | Hammer / Shooting star |
+| `pat_inside_bar` | h<prev_h AND l>prev_l | Consolidation |
+| `pat_outside_bar` | h>prev_h AND l<prev_l | Volatility expansion |
+| `pat_range_expansion_3` | range / avg(3) | Breakout potential |
+| `pat_swept_high/low_5` | sweep + reverse | Liquidity grab (smart money) |
+| `pat_consec_streak` | signed streak length | Exhaustion timing |
+
+### ผลลัพธ์
+```
+Before patterns:  BUY recall=8%   SELL recall=79%   gap=70%  ❌
+After patterns:   BUY recall=39%  SELL recall=46%   gap=7%   ✅
+```
+
+---
+
+## 3️⃣ Tick-Level Confirmation Engine
+
+### ปัญหาที่แก้
+M5 candle ปิดแล้วเห็น signal ดี **แต่ตอนยิงจริงราคาวิ่งไปไกลแล้ว** = late entry → reverse
+
+### กระบวนการ
+```
+ก่อนเปิดออเดอร์ทุกครั้ง:
+1. ดึง tick 60 วินาทีย้อนหลัง (mt5.copy_ticks_range)
+2. คำนวณ 5 metrics:
+   - buy_tick_ratio       (up-tick vs down-tick)
+   - spread_zscore        (recent spread vs baseline)
+   - stop_hunt_score      (peak retracement)
+   - velocity_burst       (max single-tick / avg)
+   - micro_trend          (linear regression slope)
+3. ถ้ามีอะไรผิด → SKIP การเปิดออเดอร์
+```
+
+### สูตร Stop Hunt Detection
+```python
+# ราคาวิ่งสุดทางหนึ่งแล้วกลับเกือบครึ่ง = ไล่ stop ของ retail
+peak_high = max(mids)
+peak_low = min(mids)
+range = peak_high - peak_low
+final_pos = mids[-1]
+
+retrace_from_high = (peak_high - final_pos) / range
+retrace_from_low = (final_pos - peak_low) / range
+stop_hunt_score = max(retrace_from_high, retrace_from_low)
+
+# ถ้า > 0.7 = ราคาแหลมแล้วกลับ 70%+ ของ range = น่าจะเป็น stop hunt
+```
+
+---
+
+## 4️⃣ Per-Direction Confidence Threshold
+
+### ปัญหาที่แก้
+Live data: BUY accuracy 21% / SELL accuracy 33% → ใช้ threshold เดียว = ไม่ fair
+
+### Solution
+```json
+"directional_threshold": {
+  "enabled": true,
+  "buy": 0.55,   // BUY ต้องมั่นใจ 55%+ (กรองเข้ม)
+  "sell": 0.42   // SELL ต้องมั่นใจ 42%+ (ผ่อนปรน)
+}
+```
+
+### Code
+```python
+if dir_thr_cfg.get("enabled", False):
+    if side == "BUY":
+        thr = float(dir_thr_cfg.get("buy", thr))
+    elif side == "SELL":
+        thr = float(dir_thr_cfg.get("sell", thr))
+```
+
+→ ปรับ threshold ตามข้อมูลจริงจาก `review_trades.py`
+
+---
+
+## 5️⃣ Class Weight Override (Training Bias Fix)
+
+### กลไก
+sklearn ปกติใช้ `compute_sample_weight("balanced")` → equal weight per class
+
+แต่ถ้า model มี directional bias → ปรับ multiplier ต่อ class:
+
+```python
+sw_tr = compute_sample_weight(class_weight="balanced", y=y_tr)
+
+cw_override = cfg_a.get("class_weight_overrides")  # {"0": 1.0, "1": 1.0, "2": 0.7}
+if cw_override:
+    for cls_str, mult in cw_override.items():
+        cls_int = int(cls_str)
+        mask = (y_tr.values == cls_int)
+        sw_tr[mask] = sw_tr[mask] * float(mult)
+```
+
+### ตีความ Multiplier
+| Multiplier | ผล |
+|---|---|
+| `> 1.0` | model "เห็น class นี้สำคัญ" → ทาย class นี้บ่อยขึ้น |
+| `= 1.0` | balanced (default) |
+| `< 1.0` | model "เห็น class นี้สำคัญน้อย" → ทาย class นี้น้อยลง |
+
+### ⚠️ Trade-off
+- ถ้าไม่ใช้ pattern features → ต้อง override (เช่น BUY=0.7) เพื่อแก้ bias
+- ถ้าใช้ pattern features → ใช้ 1.0 ทุก class ได้
+
+---
+
+## 6️⃣ Auto-Reconstruct Recovery State จาก DB
+
+### ปัญหาที่แก้
+ถ้า bot crash + ลบ `recovery_state.json` → restart = state รีเซ็ต = consecutive_losses = 0  
+แต่ MT5 ยังมี position ค้าง → ปิดแล้วนับเป็น loss #1 (ผิด!)
+
+### Solution
+```python
+def _restore_recovery(self):
+    if RECOVERY_STATE_FILE.exists():
+        # load from file (fast path)
+        return
+
+    # 🆕 Fallback: query DB
+    db_state = self.db.find_open_series_state(self.symbol)
+    if db_state and db_state["consecutive_losses"] > 0:
+        self.recovery.series_id = db_state["series_id"]
+        self.recovery.consecutive_losses = db_state["consecutive_losses"]
+        self.recovery.cumulative_loss_usd = db_state["cumulative_loss_usd"]
+        # ... reconstruct fully
+```
+
+### DB Query
+```sql
+-- หา latest unsettled series
+SELECT id, side FROM series
+WHERE symbol=? AND status='OPEN'
+ORDER BY id DESC LIMIT 1;
+
+-- นับ LOSS decisions ใน series
+SELECT COUNT(*) n, SUM(ABS(pnl)) loss_sum, SUM(volume) vol_sum
+FROM decisions WHERE series_id=? AND status='LOSS';
+```
+
+---
+
+## 7️⃣ Past Trade Reviewer (`review_trades.py`)
+
+### Features
+
+```
+🎯 Win/Loss + Net P/L + Real RR + Break-even WR
+🚨 High-Confidence LOSSES (top 10)
+📈 WR per Direction (BUY vs SELL)
+🕐 WR per Hour UTC (top 6 hours)
+⚡ WR per ATR regime (LOW/MID/HIGH)
+📏 WR per Spread tier (wide vs narrow)
+💔 Loss Streak distribution
+♻️ Recovery Series outcomes
+💡 Auto-recommendations
+```
+
+### ใช้ตอนไหน
+1. ✅ หลังเก็บ trades 50+ ไม้
+2. ✅ ก่อนปรับ config (เพื่อ data-driven decision)
+3. ✅ หลัง retrain เพื่อตรวจ regime change
+
+---
+
+# 📋 Workflow แนะนำ
+
+```
+1. เริ่มจาก Demo $500
+2. Train model: python run.py train
+3. Run bot: python run.py bot
+4. หลัง 1-3 วัน (50+ trades): python review_trades.py
+5. ดู:
+   - BUY vs SELL gap > 20%? → ปรับ class_weight หรือ directional_threshold
+   - High-conf LOSS > 30%? → กรอง features ที่หลอก หรือเพิ่ม tick filter
+   - Loss streak > 5? → ลด max_steps หรือ enable session filter
+6. กลับไปข้อ 2 (retrain) ด้วย config ใหม่
+7. Repeat จนกว่า WR > 50% และ Real RR > 1.0
+```
+
+---
+
 # 🎯 Final Words
 
 > **"การสร้าง trading bot ไม่ใช่เกี่ยวกับการทำให้ AI แม่น 100%

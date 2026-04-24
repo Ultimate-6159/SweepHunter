@@ -58,6 +58,24 @@ FEATURE_COLUMNS: List[str] = [
     "time_sin",
     "time_cos",
     "session_score",
+    # ---- 🆕 Multi-Timeframe context (HTF) ----
+    "htf1_trend_dir",       # +1 above EMA, -1 below, 0 near
+    "htf1_ema_dist_atr",
+    "htf1_rsi_norm",         # rsi/100 - 0.5 (centered around 0)
+    "htf2_trend_dir",
+    "htf2_ema_dist_atr",
+    "htf2_rsi_norm",
+    # ---- 🆕 Symmetric Candle Patterns (3-5 bar lookback) ----
+    "pat_engulf_bull",       # bullish engulfing
+    "pat_engulf_bear",       # bearish engulfing
+    "pat_pinbar_top_5",      # rejection from top (max upper_wick/range in 5)
+    "pat_pinbar_bot_5",      # rejection from bottom
+    "pat_inside_bar",        # consolidation
+    "pat_outside_bar",       # volatility expansion
+    "pat_range_expansion_3", # current range vs avg(3)
+    "pat_swept_high_5",      # liquidity grab at high (sweep + reverse)
+    "pat_swept_low_5",       # liquidity grab at low
+    "pat_consec_streak",     # signed: + bull streak / - bear streak
 ]
 
 
@@ -97,6 +115,48 @@ def _session_score(hour_utc: pd.Series) -> pd.Series:
     s[(h >= 13) & (h < 17)] = 3.0
     s[(h >= 17) & (h < 22)] = 2.0
     return s
+
+
+def _mtf_features(df: pd.DataFrame, multiplier: int, prefix: str,
+                   ema_period: int = 20, atr_period: int = 14, rsi_period: int = 14
+                   ) -> pd.DataFrame:
+    """
+    Compute Higher-Timeframe context features by resampling the base df.
+    multiplier = 3 means: if base=M5 → HTF=M15 (3×); if base=M5 → HTF=H1 (12×).
+    Each base bar inherits the latest closed HTF bar's features (forward fill).
+    Returns DataFrame with columns: {prefix}_trend_dir, {prefix}_ema_dist_atr, {prefix}_rsi_norm
+    """
+    if multiplier <= 1:
+        out = pd.DataFrame(index=df.index)
+        out[f"{prefix}_trend_dir"] = 0.0
+        out[f"{prefix}_ema_dist_atr"] = 0.0
+        out[f"{prefix}_rsi_norm"] = 0.0
+        return out
+    # Build HTF bars: every Nth row's OHLC aggregated
+    htf = pd.DataFrame(index=df.index)
+    htf["bucket"] = (np.arange(len(df)) // multiplier)
+    grp = df.groupby(htf["bucket"])
+    htf_o = grp["open"].first()
+    htf_h = grp["high"].max()
+    htf_l = grp["low"].min()
+    htf_c = grp["close"].last()
+    htf_df = pd.DataFrame({"open": htf_o, "high": htf_h, "low": htf_l, "close": htf_c})
+    # ATR + EMA + RSI on HTF
+    htf_atr = _atr(htf_df, atr_period)
+    htf_ema = htf_c.ewm(span=ema_period, adjust=False).mean()
+    htf_rsi = _rsi(htf_c, rsi_period)
+    atr_safe = htf_atr.replace(0, np.nan)
+    htf_dist = (htf_c - htf_ema) / atr_safe
+    htf_dir = np.sign(htf_dist).fillna(0.0)
+    htf_rsi_norm = (htf_rsi / 100.0) - 0.5
+    # Map back to base df rows (use bucket-1 = last CLOSED higher-TF bar)
+    bucket_for_row = htf["bucket"].astype(int) - 1
+    bucket_for_row = bucket_for_row.clip(lower=0)
+    out = pd.DataFrame(index=df.index)
+    out[f"{prefix}_trend_dir"] = bucket_for_row.map(htf_dir).fillna(0.0).astype(float).values
+    out[f"{prefix}_ema_dist_atr"] = bucket_for_row.map(htf_dist).fillna(0.0).astype(float).values
+    out[f"{prefix}_rsi_norm"] = bucket_for_row.map(htf_rsi_norm).fillna(0.0).astype(float).values
+    return out
 
 
 # --------------------------------------------------------------------- features
@@ -170,6 +230,75 @@ def build_features(rates) -> pd.DataFrame:
     df["time_sin"] = np.sin(angle)
     df["time_cos"] = np.cos(angle)
     df["session_score"] = _session_score(df["time"].dt.hour)
+
+    # ----- 🆕 Multi-Timeframe context -----
+    # base TF → infer multipliers (M1: htf1=15, htf2=60 | M5: htf1=3, htf2=12 | M15: htf1=2, htf2=4)
+    base_tf = str(cfg.get("timeframe", "M5")).upper()
+    if base_tf == "M1":
+        m1, m2 = 15, 60
+    elif base_tf == "M5":
+        m1, m2 = 3, 12   # M15, H1
+    elif base_tf == "M15":
+        m1, m2 = 4, 16   # H1, H4
+    else:
+        m1, m2 = 4, 12
+    htf1 = _mtf_features(df, m1, "htf1", ema_p, atr_p)
+    htf2 = _mtf_features(df, m2, "htf2", ema_p, atr_p)
+    for col in htf1.columns:
+        df[col] = htf1[col].values
+    for col in htf2.columns:
+        df[col] = htf2[col].values
+
+    # ----- 🆕 Symmetric Candle Patterns (3-5 bar lookback) -----
+    # symmetric features: ทำงานทั้ง BUY/SELL ได้เท่ากัน → กัน directional bias
+    o1, h1, l1, c1 = o.shift(1), h.shift(1), l.shift(1), c.shift(1)
+    body_now = (c - o)
+    body_prev = (c1 - o1)
+    bull_now = (body_now > 0)
+    bear_now = (body_now < 0)
+    bull_prev = (body_prev > 0)
+    bear_prev = (body_prev < 0)
+
+    # Engulfing: bull engulfs prev bear, body > prev body
+    df["pat_engulf_bull"] = (
+        bear_prev & bull_now &
+        (c > o1) & (o < c1) &
+        (body_now.abs() > body_prev.abs())
+    ).astype(float)
+    df["pat_engulf_bear"] = (
+        bull_prev & bear_now &
+        (c < o1) & (o > c1) &
+        (body_now.abs() > body_prev.abs())
+    ).astype(float)
+
+    # Pin bar: max upper/lower wick / range over last 5 bars
+    rng = (h - l).replace(0, np.nan)
+    upper_pct = (upper_wick / rng).clip(0, 1).fillna(0)
+    lower_pct = (lower_wick / rng).clip(0, 1).fillna(0)
+    df["pat_pinbar_top_5"] = upper_pct.rolling(5, min_periods=3).max().fillna(0)
+    df["pat_pinbar_bot_5"] = lower_pct.rolling(5, min_periods=3).max().fillna(0)
+
+    # Inside bar: current range fully inside prev range
+    df["pat_inside_bar"] = ((h < h1) & (l > l1)).astype(float)
+    # Outside bar: current range fully engulfs prev
+    df["pat_outside_bar"] = ((h > h1) & (l < l1)).astype(float)
+
+    # Range expansion: current range / avg(last 3)
+    range_now = (h - l)
+    avg_range_3 = range_now.shift(1).rolling(3, min_periods=2).mean().replace(0, np.nan)
+    df["pat_range_expansion_3"] = (range_now / avg_range_3).clip(0, 5).fillna(1.0)
+
+    # Liquidity sweep: high/low pierces 5-bar extreme then closes back inside
+    prev_high_5 = h.shift(1).rolling(5, min_periods=3).max()
+    prev_low_5 = l.shift(1).rolling(5, min_periods=3).min()
+    df["pat_swept_high_5"] = ((h > prev_high_5) & (c < prev_high_5)).astype(float)
+    df["pat_swept_low_5"] = ((l < prev_low_5) & (c > prev_low_5)).astype(float)
+
+    # Consecutive streak (signed): +k = k bull bars, -k = k bear bars
+    direction = np.sign(body_now)
+    streak_id = (direction != direction.shift(1)).cumsum()
+    streak_len = direction.groupby(streak_id).cumcount() + 1
+    df["pat_consec_streak"] = (direction * streak_len).clip(-7, 7).fillna(0)
 
     return df
 

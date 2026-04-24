@@ -25,21 +25,48 @@
 
 ---
 
-## 🧠 AI Engine — XGBoost 22 Features
+## 🧠 AI Engine — XGBoost 38 Features (M5 + Multi-Timeframe + Patterns)
 
-ระบบเรียนรู้จากแท่งเทียน M1 ย้อนหลัง **200,000 แท่ง** (ราว 5 เดือน) ครอบคลุม 7 มิติ:
+ระบบเรียนรู้จากแท่งเทียน **M5** ย้อนหลัง **300,000 แท่ง** ครอบคลุม **9 มิติ**:
 
 ```
-📊 Candle Anatomy         body_atr, wick ratios, candle direction
-⚡ Fast ATR Normalisation  upper/lower wicks, body relative to fast ATR
-🚀 Momentum               velocity_2/5, ret_1, RSI_7, EMA distance
-📈 Volume Surge           vol_accel_3, vol_spike_10
-💥 Micro Breakout         breakout up/down 5 bars, near high/low
-🌊 Volatility Regime      ATR ratio (calm vs volatile market)
-⏰ Time Encoding          time_sin, time_cos, session_score
+📊 Candle Anatomy            body_atr, wick ratios, candle direction
+⚡ Fast ATR Normalisation     upper/lower wicks, body / fast ATR
+🚀 Momentum                  velocity_2/5, ret_1, RSI_7, EMA distance
+📈 Volume Surge              vol_accel_3, vol_spike_10
+💥 Micro Breakout            breakout up/down 5 bars, near high/low
+🌊 Volatility Regime         ATR ratio (calm vs volatile market)
+⏰ Time Encoding             time_sin, time_cos, session_score
+🆕 Multi-Timeframe Context   M15+H1 (trend_dir, ema_dist, rsi_norm)
+🆕 Symmetric Patterns        engulfing, pinbar, inside/outside, sweep, streak
 ```
 
-**Output:** `[P(SELL), P(HOLD), P(BUY)]` → เทรดเฉพาะตอนที่ AI มั่นใจ ≥ 50%
+**Output:** `[P(SELL), P(HOLD), P(BUY)]` → เทรดเฉพาะตอนที่ AI มั่นใจ ≥ threshold
+
+### 🎯 Anti-Bias System
+
+| ชั้น | ทำหน้าที่ |
+|---|---|
+| **Class weight overrides** (`ai.class_weight_overrides`) | ปรับ training weight ต่อ class แก้ bias ตอนเทรน |
+| **Per-direction threshold** (`hyper_frequency.directional_threshold`) | BUY ต้อง conf ≥ X, SELL ≥ Y (ตั้งคนละค่า) |
+| **Tick confirmation** (`hyper_frequency.tick_confirmation`) | ดู tick 60s ก่อนยิง (กัน fake signal/stop hunt) |
+| **Symmetric features** | Pattern features ทำงานทั้ง BUY/SELL เท่ากัน → ไม่มี directional bias ในตัว model |
+
+---
+
+## 🔬 Tick-Level Confirmation Engine (`core/tick_analyzer.py`)
+
+ก่อนยิงออเดอร์ — ดึง tick 60 วินาทีย้อนหลัง วิเคราะห์ 5 อย่าง:
+
+```
+🔍 Buy/Sell tick imbalance     (up-tick vs down-tick)
+📏 Spread z-score              (broker manipulation/news leak)
+🎣 Stop hunt detection         (ราคาแหลม-กลับ = ไล่ stop)
+💥 Velocity burst              (whale/news entry)
+📐 Micro trend slope           (tick-level direction)
+```
+
+ถ้าเงื่อนไขใดไม่ผ่าน → **skip การเปิดออเดอร์** (กัน fake signal)
 
 ---
 
@@ -72,17 +99,31 @@ next_lot = min(next_lot, max_lot_cap)                     # capped
 
 ---
 
-## 🚦 ระบบป้องกันความเสี่ยง 7 ชั้น
+## 🚦 ระบบป้องกันความเสี่ยง 11 ชั้น
 
 | ชั้น | กลไก | ป้องกันอะไร |
 |---|---|---|
-| 1️⃣ | **Confidence ≥ 50%** | กรองสัญญาณอ่อน (random baseline = 33%) |
-| 2️⃣ | **Trend Filter** (`ema_dist_atr`) | ห้ามเทรดทวนเทรนด์ |
-| 3️⃣ | **Inter-trade Cooldown** (180s) | ป้องกัน over-trading จาก noise |
-| 4️⃣ | **Dynamic Spread Guard** | ไม่เทรดตอน spread กว้างผิดปกติ |
-| 5️⃣ | **News Filter** (Forex Factory) | หยุดก่อน-หลังข่าวสำคัญ ±10 นาที |
-| 6️⃣ | **Max Steps + Halt Cooldown** | เสีย 4 ไม้ติด → หยุดเทรด 10 นาที reset |
-| 7️⃣ | **Global Equity Stop** | ขาดทุนรวม ≥ 7% ของ balance → ปิดทุกไม้ + HALT |
+| 1️⃣ | **Confidence ≥ threshold** | กรองสัญญาณอ่อน (random baseline = 33%) |
+| 2️⃣ | **Per-Direction Threshold** 🆕 | BUY/SELL ตั้ง threshold คนละค่า แก้ bias |
+| 3️⃣ | **Trend Filter** (`ema_dist_atr`) | ห้ามเทรดทวนเทรนด์ |
+| 4️⃣ | **Multi-bar Confirmation** | ต้องเห็น signal ติดต่อกัน N แท่ง |
+| 5️⃣ | **FOMO Exhaustion Guard** | ไม่เข้าตอนสุดเทรนด์ |
+| 6️⃣ | **Tick-Level Confirmation** 🆕 | กัน fake signal/stop hunt ระดับ tick |
+| 7️⃣ | **Inter-trade Cooldown** | ป้องกัน over-trading จาก noise |
+| 8️⃣ | **Dynamic Spread Guard** | ไม่เทรดตอน spread กว้างผิดปกติ |
+| 9️⃣ | **News Filter** (Forex Factory) | หยุดก่อน-หลังข่าวสำคัญ ±10 นาที |
+| 🔟 | **Max Steps + Halt Cooldown** | เสีย N ไม้ติด → หยุด/reset |
+| 1️⃣1️⃣ | **Global Equity Stop** | ขาดทุนรวม ≥ X% balance → ปิดทุกไม้ + HALT |
+
+---
+
+## 🧬 Memory & State Persistence
+
+| กลไก | ทำหน้าที่ |
+|---|---|
+| `data/recovery_state.json` | บันทึก consecutive_losses + cumulative_loss real-time |
+| **DB Auto-Reconstruct** 🆕 | ถ้า state file หาย → reconstruct จาก SQLite (`series` + `decisions`) |
+| **Processed tickets cache** | กัน double-count loss/win ของ ticket เดียวกัน |
 
 ---
 
@@ -124,15 +165,19 @@ next_lot = min(next_lot, max_lot_cap)                     # capped
 ```
 SweepHunter/
 ├── run.py                        🎯 Entry: train | bot | status
+├── review_trades.py              🔬 🆕 Past trade analyzer (bias/streak/regime)
 ├── config.json                   ⚙️  All-in-one config
+├── FEATURE_ENGINEERING_V2.md     🧬 🆕 Blueprint for next-gen features
+├── LEARNING.md                   📚 Tutorial (Thai)
 ├── core/
-│   ├── xauusd_hyper_core.py      🧠 Main loop + Recovery Engine
-│   ├── m1_hyper_pipeline.py      📊 22 Feature engineering
-│   ├── model_trainer.py          🎓 XGBoost training pipeline
+│   ├── xauusd_hyper_core.py      🧠 Main loop + Recovery + Anti-bias filters
+│   ├── m1_hyper_pipeline.py      📊 38 Features (Micro+MTF+Patterns)
+│   ├── model_trainer.py          🎓 XGBoost + class_weight overrides
+│   ├── tick_analyzer.py          🔬 🆕 Tick-level confirmation engine
 │   ├── execution.py              ⚡ IOC + Spread + Retry (5×0.2s)
-│   ├── mt5_connector.py          🔌 MT5 auto-detect spec
+│   ├── mt5_connector.py          🔌 MT5 auto-detect + tick history
 │   ├── news_filter.py            📰 Forex Factory XML
-│   ├── async_db_manager.py       💾 Async SQLite + Webhook
+│   ├── async_db_manager.py       💾 Async SQLite + DB recovery reconstruct
 │   ├── config.py / logger.py / paths.py
 │   └── __init__.py
 └── data/                         📁 auto: models/ db/ logs/ cache/
@@ -184,16 +229,49 @@ python run.py bot        # เริ่มเทรด!
 }
 ```
 
-### AI Decision Filters
+### AI Decision Filters (Anti-Bias Stack)
 ```json
 "hyper_frequency": {
   "min_confidence": 0.50,
   "trend_filter_enabled": true,
   "trend_min_ema_dist_atr": 0.10,
-  "min_seconds_between_entries": 180,
-  "cooldown_seconds_after_series_close": 60
+  "require_consecutive_bars": 1,
+  "min_seconds_between_entries": 0,
+  "cooldown_seconds_after_series_close": 30,
+  "exhaustion_filter": {
+    "enabled": true,
+    "max_velocity_5_atr": 1.2,
+    "max_near_extreme": 0.85
+  },
+  "tick_confirmation": {
+    "enabled": true,
+    "seconds_back": 60,
+    "min_ticks": 20,
+    "max_spread_zscore": 3.0,
+    "min_directional_ratio": 0.55,
+    "max_stop_hunt_score": 0.70,
+    "max_velocity_burst": 0.85,
+    "require_micro_trend_aligned": true
+  },
+  "directional_threshold": {
+    "enabled": true,
+    "buy": 0.55,
+    "sell": 0.42
+  }
 }
 ```
+
+### Class Weight Override (แก้ training bias)
+```json
+"ai": {
+  "class_weight_overrides": {
+    "0": 1.0,   // SELL
+    "1": 1.0,   // HOLD
+    "2": 1.0    // BUY
+  }
+}
+```
+> 💡 **Tip:** ใช้ `python review_trades.py` เพื่อตรวจ BUY vs SELL accuracy ก่อนปรับค่า
 
 ### Smart Trailing
 ```json
@@ -311,12 +389,31 @@ max_lot_cap  = (balance × max_lot_pct%)        ÷ (SL_distance × USD/lot)
 python run.py status     # ตรวจ MT5 + symbol spec
 python run.py train      # train model ใหม่
 python run.py bot        # รันบอท (โหมด live)
+python review_trades.py  # 🆕 วิเคราะห์ trade history (WR, bias, hour, ATR, streak)
 
-# ลบ recovery state ค้าง
+# ลบ recovery state ค้าง (ถูก reconstruct จาก DB อัตโนมัติ)
 Remove-Item data\recovery_state.json
 
 # ดู log แบบ live
 Get-Content data\logs\hyper.log -Wait -Tail 30
+```
+
+---
+
+## 🔬 Past Trade Review Tool (`review_trades.py`) 🆕
+
+วิเคราะห์ trade history เชิงลึก:
+
+```
+🎯 Win/Loss stats + Net P/L + Real RR
+🚨 High-Confidence LOSSES (สัญญาณที่ AI มั่นใจมากแต่ผิด)
+📈 Win Rate per Direction (BUY vs SELL → จับ bias)
+🕐 Win Rate per Hour UTC (หา session ที่ห่วยที่สุด)
+⚡ Win Rate per ATR regime (LOW/MID/HIGH volatility)
+📏 Win Rate per Spread tier (กว้าง vs แคบ)
+💔 Loss Streak distribution
+♻️ Recovery Series outcomes (CLOSED_TP/SL/MAX_STEPS/EQUITY_STOP)
+💡 Auto recommendations
 ```
 
 ---

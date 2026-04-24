@@ -98,10 +98,25 @@ def train_from_mt5(symbol: Optional[str] = None,
 
     sw_tr = compute_sample_weight(class_weight="balanced", y=y_tr)
 
+    # 🆕 Anti-bias: penalize wrong-direction class harder
+    # Read class_weight_overrides from config (e.g., {"0": 1.0, "1": 1.0, "2": 1.5} → BUY mistakes 1.5× more costly)
+    cw_override = cfg_a.get("class_weight_overrides")
+    if cw_override:
+        log.info("Applying class_weight overrides: %s", cw_override)
+        for cls_str, mult in cw_override.items():
+            cls_int = int(cls_str)
+            mask = (y_tr.values == cls_int)
+            sw_tr[mask] = sw_tr[mask] * float(mult)
+
     tscv = TimeSeriesSplit(n_splits=4)
     cv_accs = []
     for k, (i_tr, i_va) in enumerate(tscv.split(X_tr), 1):
         sw_k = compute_sample_weight(class_weight="balanced", y=y_tr.iloc[i_tr])
+        if cw_override:
+            for cls_str, mult in cw_override.items():
+                cls_int = int(cls_str)
+                mask = (y_tr.iloc[i_tr].values == cls_int)
+                sw_k[mask] = sw_k[mask] * float(mult)
         m = _build_xgb(n_estimators=600, with_early_stop=True)
         m.fit(X_tr.iloc[i_tr], y_tr.iloc[i_tr], sample_weight=sw_k,
               eval_set=[(X_tr.iloc[i_va], y_tr.iloc[i_va])], verbose=False)
@@ -135,6 +150,26 @@ def train_from_mt5(symbol: Optional[str] = None,
                                     target_names=["SELL", "HOLD", "BUY"],
                                     output_dict=True, zero_division=0)
     log.info("OOS confusion matrix: %s", cm)
+
+    # 🆕 Per-class accuracy diagnostics + feature importance
+    for cls_idx, cls_name in [(0, "SELL"), (1, "HOLD"), (2, "BUY")]:
+        cls_total = int((y_te == cls_idx).sum())
+        cls_correct = int(((y_te == cls_idx) & (y_pred == cls_idx)).sum())
+        cls_acc = cls_correct / cls_total if cls_total > 0 else 0.0
+        cls_pred_total = int((y_pred == cls_idx).sum())
+        cls_precision = cls_correct / cls_pred_total if cls_pred_total > 0 else 0.0
+        log.info("  %s: recall=%.3f (%d/%d) precision=%.3f predicted=%d",
+                 cls_name, cls_acc, cls_correct, cls_total, cls_precision, cls_pred_total)
+
+    # Feature importance (top 10)
+    try:
+        importances = final.feature_importances_
+        ranked = sorted(zip(FEATURE_COLUMNS, importances), key=lambda x: -x[1])
+        log.info("Top-10 feature importances:")
+        for fname, fimp in ranked[:10]:
+            log.info("  %.4f  %s", fimp, fname)
+    except Exception as e:
+        log.debug("feature importance failed: %s", e)
 
     out = model_path(cfg_a["model_filename"])
     joblib.dump({"model": final, "features": FEATURE_COLUMNS}, out)

@@ -119,6 +119,7 @@ class HyperBot:
         self._last_entry_ts = 0.0
         self._cached_balance: float = 0.0
         self._cached_balance_ts: float = 0.0
+        self._recent_predictions: list = []   # multi-bar confirmation history
         self._trades_at_last_train = self.db.count_settled()
 
     # ============================================================ model
@@ -155,16 +156,36 @@ class HyperBot:
             log.warning("Could not save recovery state: %s", e)
 
     def _restore_recovery(self) -> None:
-        if not RECOVERY_STATE_FILE.exists():
-            return
+        if RECOVERY_STATE_FILE.exists():
+            try:
+                d = json.loads(RECOVERY_STATE_FILE.read_text(encoding="utf-8"))
+                self.recovery = RecoveryState.from_dict(d)
+                log.info("📂 Recovery state restored (file): losses=%d cum_loss=$%.2f series=%s",
+                         self.recovery.consecutive_losses,
+                         self.recovery.cumulative_loss_usd,
+                         self.recovery.series_id)
+                return
+            except Exception as e:
+                log.warning("Could not restore recovery state file: %s — fallback to DB", e)
+        # 🆕 fallback: reconstruct from DB if file missing/corrupt
         try:
-            d = json.loads(RECOVERY_STATE_FILE.read_text(encoding="utf-8"))
-            self.recovery = RecoveryState.from_dict(d)
-            log.info("Recovery state restored: losses=%d cum_loss=$%.2f",
-                     self.recovery.consecutive_losses,
-                     self.recovery.cumulative_loss_usd)
+            db_state = self.db.find_open_series_state(self.symbol)
         except Exception as e:
-            log.warning("Could not restore recovery state: %s", e)
+            log.warning("DB reconstruct failed: %s", e)
+            db_state = None
+        if db_state and db_state["consecutive_losses"] > 0:
+            self.recovery.series_id = db_state["series_id"]
+            self.recovery.consecutive_losses = db_state["consecutive_losses"]
+            self.recovery.cumulative_loss_usd = db_state["cumulative_loss_usd"]
+            self.recovery.cumulative_losing_volume = db_state["cumulative_losing_volume"]
+            self.recovery.last_side = db_state["side"]
+            log.warning("🔄 Recovery state RECONSTRUCTED จาก DB: series #%d เสียติด %d ไม้ ค้าง $%.2f → ต่อจากเดิม",
+                        self.recovery.series_id,
+                        self.recovery.consecutive_losses,
+                        self.recovery.cumulative_loss_usd)
+            self._save_recovery()
+        else:
+            log.info("📂 ไม่มี recovery state เก่า — เริ่มสด")
 
     # ============================================================ heartbeat
     def _log_heartbeat(self) -> None:
@@ -344,6 +365,15 @@ class HyperBot:
         hour_utc = datetime.fromtimestamp(bar_time, tz=timezone.utc).hour
         thr = self._session_threshold(base_thr, hour_utc)
 
+        # 🆕 Per-direction confidence override (anti-bias)
+        # ถ้า model มี directional bias (เช่น BUY แม่นน้อยกว่า SELL) → ตั้ง threshold คนละค่า
+        dir_thr_cfg = self.cfg_h.get("directional_threshold", {})
+        if dir_thr_cfg.get("enabled", False):
+            if side == "BUY":
+                thr = float(dir_thr_cfg.get("buy", thr))
+            elif side == "SELL":
+                thr = float(dir_thr_cfg.get("sell", thr))
+
         bar_dt = datetime.fromtimestamp(bar_time, tz=timezone.utc)
         debt_str = ("💳 ค้าง $%.2f (เสียติด %d ไม้)" %
                     (self.recovery.cumulative_loss_usd, self.recovery.consecutive_losses)
@@ -371,10 +401,74 @@ class HyperBot:
                          ema_dist, min_dist)
                 return
 
+        # 🆕 Exhaustion Filter — ป้องกัน FOMO entry (เข้าตอนสุดเทรนด์)
+        # ถ้าราคาวิ่งไปทาง signal มากเกินไปแล้ว → มีแนวโน้มกลับตัว → skip
+        ex_cfg = self.cfg_h.get("exhaustion_filter", {})
+        if ex_cfg.get("enabled", True):
+            max_velocity = float(ex_cfg.get("max_velocity_5_atr", 1.5))
+            max_near_extreme = float(ex_cfg.get("max_near_extreme", 0.85))
+            velocity_5 = float(feat_row.get("price_velocity_5", 0.0))
+            near_high_5 = float(feat_row.get("near_high_5", 0.5))
+            near_low_5 = float(feat_row.get("near_low_5", 0.5))
+            if side == "BUY":
+                if velocity_5 > max_velocity:
+                    log.info("🚫 FOMO guard: BUY แต่ราคาวิ่งขึ้นแล้ว %.2f ATR ใน 5 bars (เกิน %.2f) → ข้าม (กลัวกลับตัว)",
+                             velocity_5, max_velocity)
+                    return
+                if near_high_5 > max_near_extreme:
+                    log.info("🚫 FOMO guard: BUY แต่ราคาอยู่ใกล้ high 5 bars แล้ว (%.0f%% > %.0f%%) → ข้าม",
+                             near_high_5*100, max_near_extreme*100)
+                    return
+            elif side == "SELL":
+                if velocity_5 < -max_velocity:
+                    log.info("🚫 FOMO guard: SELL แต่ราคาวิ่งลงแล้ว %.2f ATR ใน 5 bars (เกิน -%.2f) → ข้าม (กลัวกลับตัว)",
+                             velocity_5, max_velocity)
+                    return
+                if near_low_5 > max_near_extreme:
+                    log.info("🚫 FOMO guard: SELL แต่ราคาอยู่ใกล้ low 5 bars แล้ว (%.0f%% > %.0f%%) → ข้าม",
+                             near_low_5*100, max_near_extreme*100)
+                    return
+
         ok, reason = spread_guard(spec, cur_spread, self.spread_tracker)
         if not ok:
             log.info("🚫 ยกเลิก: spread กว้างเกิน — %s", reason)
             return
+
+        # 🆕 Tick-Level Confirmation — ดู tick ล่าสุดก่อนยิง (กัน fake signal/stop hunt)
+        tick_cfg = self.cfg_h.get("tick_confirmation", {})
+        if tick_cfg.get("enabled", False):
+            try:
+                from .tick_analyzer import analyze_ticks_for_signal
+                ta = analyze_ticks_for_signal(
+                    symbol=self.symbol, side=side,
+                    seconds_back=int(tick_cfg.get("seconds_back", 60)),
+                    min_ticks=int(tick_cfg.get("min_ticks", 20)),
+                    max_spread_zscore=float(tick_cfg.get("max_spread_zscore", 3.0)),
+                    min_buy_ratio_for_buy=float(tick_cfg.get("min_directional_ratio", 0.55)),
+                    max_stop_hunt_score=float(tick_cfg.get("max_stop_hunt_score", 0.7)),
+                    max_velocity_burst=float(tick_cfg.get("max_velocity_burst", 0.85)),
+                    require_micro_trend_aligned=bool(tick_cfg.get("require_micro_trend_aligned", True)),
+                )
+                if not ta.confirmed:
+                    log.info("🚫 Tick reject: %s | %s", ta.reason, ta.to_log())
+                    return
+                log.info("✅ Tick confirm: %s", ta.to_log())
+            except Exception as e:
+                log.debug("tick analysis failed (skip): %s", e)
+
+        # 🆕 Multi-bar confirmation — ป้องกัน whipsaw
+        # เก็บ prediction ของแท่งล่าสุด ถ้า require_consecutive_bars=2 → ต้อง 2 แท่งติดเห็นทิศเดียวกัน
+        require_n = int(self.cfg_h.get("require_consecutive_bars", 1))
+        self._recent_predictions.append(pred)
+        if len(self._recent_predictions) > 5:
+            self._recent_predictions = self._recent_predictions[-5:]
+        if require_n > 1 and len(self._recent_predictions) >= require_n:
+            last_n = self._recent_predictions[-require_n:]
+            if not all(p == pred for p in last_n):
+                log.info("🚫 รอยืนยัน: ต้องการ %d แท่งติด predict %s แต่ล่าสุด %s → ข้าม",
+                         require_n, CLASS_NAMES[pred],
+                         "/".join(CLASS_NAMES[p] for p in last_n))
+                return
 
         # cooldown ระหว่างไม้ (กัน over-trading จาก noise)
         cooldown = float(self.cfg_h.get("min_seconds_between_entries", 0))
@@ -792,7 +886,27 @@ class HyperBot:
                   effective, max_loss, pct)
         for p in live:
             close_position(p.ticket)
-        self._on_max_steps_exceeded()
+        # ใช้ halt logic เดียวกับ max_steps (cooldown + reset state) แต่ไม่ log ซ้ำว่าเป็น max_steps
+        sid = self.recovery.series_id
+        halt_min = float(self.cfg_r.get("halt_after_max_steps_minutes", 10))
+        if sid is not None:
+            self.db.close_series(sid, status="CLOSED_EQUITY_STOP",
+                                 final_pnl=-self.recovery.cumulative_loss_usd,
+                                 total_volume=0.0, avg_entry_price=0.0,
+                                 notes=f"equity stop after {self.recovery.consecutive_losses} losses")
+            self.webhook.series_closed({
+                "series_id": sid, "symbol": self.symbol,
+                "consecutive_losses": self.recovery.consecutive_losses,
+                "final_pnl": -self.recovery.cumulative_loss_usd,
+                "reason": "EQUITY_STOP",
+            })
+        self.recovery.halted_until_ts = time.time() + halt_min * 60
+        self.recovery.cumulative_loss_usd = 0.0
+        self.recovery.cumulative_losing_volume = 0.0
+        self.recovery.consecutive_losses = 0
+        self.recovery.series_id = None
+        self.recovery.last_side = None
+        self._save_recovery()
 
     # ============================================================ self-retrain
     def _maybe_retrain(self) -> None:

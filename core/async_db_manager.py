@@ -203,6 +203,36 @@ class AsyncDBManager:
                 "SELECT * FROM decisions WHERE status IN ('OPEN','PENDING') AND ticket IS NOT NULL"
             ))
 
+    def find_open_series_state(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Reconstruct recovery state from DB for crash-recovery.
+        Returns the latest unsettled OPEN series + summary of LOSS decisions in it.
+        Used when recovery_state.json is missing/corrupt.
+        """
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT id, side, opened_at_utc FROM series "
+                "WHERE symbol=? AND status='OPEN' "
+                "ORDER BY id DESC LIMIT 1",
+                (symbol,),
+            ).fetchone()
+            if not row:
+                return None
+            sid = int(row["id"])
+            losses = c.execute(
+                "SELECT COUNT(*) n, COALESCE(SUM(ABS(pnl)),0) loss_sum, "
+                "COALESCE(SUM(volume),0) vol_sum "
+                "FROM decisions WHERE series_id=? AND status='LOSS'",
+                (sid,),
+            ).fetchone()
+            return {
+                "series_id": sid,
+                "side": row["side"],
+                "consecutive_losses": int(losses["n"] or 0),
+                "cumulative_loss_usd": float(losses["loss_sum"] or 0.0),
+                "cumulative_losing_volume": float(losses["vol_sum"] or 0.0),
+            }
+
     def count_settled(self) -> int:
         with self._conn() as c:
             return int(c.execute(

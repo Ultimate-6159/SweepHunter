@@ -28,3 +28,5 @@ config.local.json
 # OS
 Thumbs.db
 .DS_Store
+
+.git_commit_msg.tmp

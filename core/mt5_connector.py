@@ -194,6 +194,26 @@ class MT5Connector:
         return mt5.symbol_info_tick(cls.resolve_symbol(symbol))
 
     @classmethod
+    def copy_ticks_recent(cls, symbol: str, seconds_back: int = 60, count_max: int = 5000):
+        """
+        ดึง tick ล่าสุด N วินาทีย้อนหลัง (สำหรับ tick-level confirmation).
+        คืน numpy structured array หรือ None ถ้าไม่มี data
+        """
+        from datetime import datetime, timezone, timedelta
+        resolved = cls.resolve_symbol(symbol)
+        utc_to = datetime.now(timezone.utc)
+        utc_from = utc_to - timedelta(seconds=seconds_back)
+        try:
+            ticks = mt5.copy_ticks_range(resolved, utc_from, utc_to, mt5.COPY_TICKS_ALL)
+            if ticks is None or len(ticks) == 0:
+                return None
+            if len(ticks) > count_max:
+                ticks = ticks[-count_max:]
+            return ticks
+        except Exception:
+            return None
+
+    @classmethod
     def copy_rates(cls, symbol: str, timeframe: str, count: int):
         """
         ดึงแท่งย้อนหลังจาก position 0.
