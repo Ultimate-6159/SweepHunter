@@ -1,1030 +1,698 @@
-# 📚 SweepHunter AI — คู่มือการเรียนรู้ฉบับนักเรียน
+# 📚 SweepHunter AI — คู่มือเรียนรู้ฉบับเข้าใจง่าย
 
-> **เอกสารนี้สำหรับ:** นักเรียน/นักศึกษาที่อยากเข้าใจการสร้าง **AI Trading Bot ระดับ Production** ตั้งแต่ทฤษฎีจนถึงการ deploy จริง
->
-> **ความรู้ที่ต้องมี:** Python พื้นฐาน, รู้จัก pandas/numpy, เข้าใจ Forex/CFD เบื้องต้น
->
-> **เวลาที่ใช้:** 4-8 ชั่วโมง (อ่าน) + 10-20 ชั่วโมง (ลงมือทำ)
+> **เขียนเพื่อ:** นักเรียนมัธยมปลาย / มือใหม่ที่อยากเข้าใจ AI Trading Bot ตั้งแต่ 0 → ใช้งานเป็น
+> **ใช้เวลา:** อ่าน 2-3 ชม. + ลงมือทำ 5-10 ชม.
+> **พื้นฐาน:** Python นิดหน่อย (ตัวแปร, if-else, function) — ไม่ต้องรู้ AI/Forex มาก่อน
 
----
-
-## 🗺️ Roadmap การเรียนรู้
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Module 1: Big Picture       (เข้าใจระบบทั้งหมดใน 15 นาที)         │
-│  Module 2: Feature Engineering (สร้าง 22 features จากแท่งเทียน)    │
-│  Module 3: Machine Learning   (XGBoost classification 3 class)    │
-│  Module 4: Trading Logic      (เปิด/ปิด/trail/recovery)           │
-│  Module 5: Risk Management    (7 layers + math เบื้องหลัง)         │
-│  Module 6: Production Patterns (async, error handling, scaling)   │
-│  Module 7: Hands-on Lab       (แบบฝึกหัด 10 ข้อ)                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="https://img.shields.io/badge/Level-Beginner_Friendly-brightgreen" />
+  <img src="https://img.shields.io/badge/Style-Story_Mode-blueviolet" />
+  <img src="https://img.shields.io/badge/Lab-10_Exercises-orange" />
+</p>
 
 ---
 
-# 📖 Module 1: Big Picture
-
-## 1.1 ระบบนี้แก้ปัญหาอะไร?
-
-**ปัญหา:** เทรดทอง (XAUUSD) บน M1 (1 นาที) ด้วยมือ → เร็วไม่ทัน, อารมณ์เข้าครอบงำ, ไม่มีวินัย
-
-**Solution:** สร้าง bot ที่:
-1. ดึงข้อมูลราคา real-time จาก MetaTrader 5
-2. สกัด features จากแท่งเทียน (22 ตัว)
-3. ใช้ AI (XGBoost) ทำนายว่าราคาจะ **ขึ้น/ลง/นิ่ง** ใน 30 นาทีข้างหน้า
-4. ตัดสินใจเปิดออเดอร์ถ้ามั่นใจ ≥ 50%
-5. มีระบบ **กู้ทุนอัจฉริยะ** ถ้าเสียติดกัน
-6. ป้องกัน blow account ด้วย hard limits
-
-## 1.2 Tech Stack — ทำไมเลือกแต่ละตัว?
-
-| เทคโนโลยี | ใช้ทำอะไร | ทำไมเลือกตัวนี้ |
-|---|---|---|
-| **Python 3.10+** | ภาษาหลัก | ML libraries เยอะ, MT5 มี API |
-| **MetaTrader 5** | broker platform | Standard ของวงการ Forex |
-| **XGBoost** | ML model | เร็ว, แม่น, รับ tabular data ดี |
-| **pandas/numpy** | data wrangling | de-facto standard |
-| **SQLite** | บันทึก trade | embedded, ไม่ต้องตั้ง server |
-| **threading.Thread** | async DB writes | ไม่ block main loop |
-| **joblib** | save/load model | จัดการ pickle ได้ดีกว่า built-in |
-
-## 1.3 Data Flow — ภาพรวม 1 minute
+## 🗺️ แผนที่การเรียน (อ่านตามลำดับ)
 
 ```
-   MT5 (broker)
-        ↓ copy_rates()
-   200 แท่ง M1 ล่าสุด
-        ↓ build_features()
-   22 features (numpy array)
-        ↓ model.predict_proba()
-   [P(SELL), P(HOLD), P(BUY)]
-        ↓ argmax + threshold
-   pred=BUY conf=0.58
-        ↓ filters: trend, spread, news, cooldown
-   ผ่านทุก filter
-        ↓ open_market_order() → MT5
-   เปิด position
-        ↓ (รอ TP/SL)
-   ปิดออเดอร์
-        ↓ update DB + RecoveryState
-   เริ่ม cycle ใหม่
+🌱 บทที่ 1: ทอง XAUUSD คืออะไร? ทำไมเทรดได้?     (10 นาที)
+🌿 บทที่ 2: AI ทำงานยังไง? อธิบายแบบเด็กม.ปลาย   (20 นาที)
+🌳 บทที่ 3: Feature Engineering — ป้อน "ตา" ให้ AI   (30 นาที)
+🌲 บทที่ 4: XGBoost — สมองของบอท                  (25 นาที)
+🌴 บทที่ 5: ตัดสินใจเทรด — Pipeline 11 ชั้น         (30 นาที)
+🎄 บทที่ 6: Recovery Engine — กู้ทุนแบบมีสติ         (25 นาที)
+🏔️ บทที่ 7: Risk Management — กันพอร์ตระเบิด        (20 นาที)
+🚀 บทที่ 8: Production Patterns — โค้ดแบบมือโปร     (30 นาที)
+🧪 บทที่ 9: ห้องแล็บ — แบบฝึก 10 ข้อ              (5+ ชม.)
+🎓 บทที่ 10: บทเรียนชีวิตจากการเทรด                  (10 นาที)
 ```
-
-## 1.4 อ่าน Code ตามลำดับนี้
-
-> 🎯 **คำแนะนำ:** อย่าอ่าน file-by-file แบบ alphabetical — อ่านตาม **call graph** จะเข้าใจเร็วกว่า
-
-```
-1. run.py                    ← entry point (เล็กมาก ~50 บรรทัด)
-2. core/config.py            ← โหลด JSON
-3. core/paths.py             ← portable paths
-4. core/mt5_connector.py     ← เชื่อม broker
-5. core/m1_hyper_pipeline.py ← feature engineering ★
-6. core/model_trainer.py     ← train XGBoost
-7. core/execution.py         ← place order safely
-8. core/xauusd_hyper_core.py ← main loop ★★★ (หัวใจ)
-9. core/async_db_manager.py  ← log trades
-10. core/news_filter.py      ← filter ข่าว
-```
-
-⭐ = อ่านสำคัญ, ⭐⭐⭐ = ต้องอ่านละเอียด
 
 ---
 
-# 🔬 Module 2: Feature Engineering
+# 🌱 บทที่ 1: ทอง XAUUSD คืออะไร?
 
-## 2.1 ทฤษฎี — ทำไมต้อง Feature Engineering?
+## 🎬 เรื่องเล่า
 
-ML model **ไม่เข้าใจ** "แท่งเทียน" หรือ "ราคา" — เข้าใจแค่ **ตัวเลข**
+> ลองนึกภาพ: คุณซื้อทอง 1 บาท ที่ราคา 35,000 บาท วันนี้
+> พรุ่งนี้ราคาขึ้นเป็น 36,000 → ขาย ได้กำไร **1,000 บาท** 💰
 
-หน้าที่เรา: **แปลงข้อมูลดิบ (OHLCV) → ตัวเลขที่มีความหมาย** ที่ model จะเรียนรู้ pattern ได้
+**XAUUSD** = ทองคำ (XAU) เทียบกับ ดอลลาร์สหรัฐ (USD)
+- 1 ออนซ์ ≈ 31.1 กรัม
+- ราคาตอนนี้ประมาณ $2,050 ต่อออนซ์
 
-### ตัวอย่างเปรียบเทียบ
+## 💡 ทำไมต้องเทรดทอง? (ไม่ใช่หุ้น)
 
-❌ **Bad feature:** ราคา close = 2050.30
-- Model จำไม่ได้ว่า 2050 vs 1800 ต่างกันยังไงในแง่ pattern
+| 🥇 ทอง | 📈 หุ้น |
+|---|---|
+| เปิด 24 ชั่วโมง (5 วัน/สัปดาห์) | เปิดแค่ 9:30-16:30 |
+| Volatility สูง = โอกาสกำไรเยอะ | ผันผวนน้อยกว่า |
+| ใช้ Leverage ได้ (1:100, 1:500) | ใช้ leverage ยาก |
+| Spread ต่ำ (~15 cents) | Spread + commission แพง |
+| ไม่ต้องวิเคราะห์ "บริษัท" | ต้องอ่านงบการเงิน |
 
-✅ **Good feature:** body_atr = (close - open) / ATR
-- เป็นค่า **normalized** บอกว่าแท่งนี้ใหญ่/เล็กแค่ไหน relative กับ volatility ปัจจุบัน
-- ใช้ได้ที่ราคา 2050 หรือ 1800 ก็ได้
+## ⚠️ แต่ระวัง!
 
-## 2.2 22 Features ในระบบ — แยกเป็น 7 กลุ่ม
-
-### Group 1: Candle Anatomy (รูปร่างแท่ง)
-
-```python
-body_atr               = (close - open) / atr
-upper_wick_body_ratio  = (high - max(open, close)) / abs(body)
-lower_wick_body_ratio  = (min(open, close) - low) / abs(body)
-candle_direction       = sign(close - open)  # +1, 0, -1
+```
+Leverage 1:100 = เหรียญ 2 ด้าน
+✅ กำไร 1% = เพิ่มทุน 100%
+❌ ขาดทุน 1% = หายทุน 100% (margin call!)
 ```
 
-**ทำไม:** แท่ง doji ที่มีไส้ยาว = อาจเป็น reversal signal
-
-### Group 2: Fast ATR Normalization
-
-```python
-upper_wick_fast_atr = (high - max(open, close)) / fast_atr_5
-body_fast_atr       = abs(close - open) / fast_atr_5
-```
-
-**ทำไม:** ใช้ ATR เร็ว (5 bars) ตรวจ volatility สั้นๆ ที่กำลังเปลี่ยน
-
-### Group 3: Momentum
-
-```python
-price_velocity_5 = (close - close.shift(5)) / atr   # ราคาเดิน 5 บาร์ = กี่ ATR
-ret_1            = (close / close.shift(1)) - 1     # return 1 bar
-rsi_7            = 100 - (100 / (1 + rs_7))         # RSI 7 period
-ema_dist_atr     = (close - ema_20) / atr           # ห่าง EMA กี่ ATR
-```
-
-**ทำไม:** เทรนด์แรง vs sideways → ต้องเทรดต่างกัน
-
-### Group 4: Volume
-
-```python
-vol_accel_3   = volume / volume.rolling(3).mean()
-vol_spike_10  = volume / volume.rolling(10).max()
-```
-
-**ทำไม:** Volume spike = institutional money เข้า → high probability move
-
-### Group 5: Micro Breakout
-
-```python
-breakout_up_5  = (high > rolling_high_5.shift(1)).astype(int)
-near_high_5    = (high - rolling_low_5) / (rolling_high_5 - rolling_low_5)
-```
-
-**ทำไม:** ทะลุ resistance/support 5 bars → momentum continuation
-
-### Group 6: Volatility Regime
-
-```python
-atr_ratio = atr_14 / atr_50   # ตลาดเงียบ vs ผันผวน
-```
-
-**ทำไม:** strategy ใช้ได้ผลใน high-vol ≠ low-vol
-
-### Group 7: Time Encoding
-
-```python
-import math
-hour = bar_time.hour
-time_sin = math.sin(2 * math.pi * hour / 24)
-time_cos = math.cos(2 * math.pi * hour / 24)
-session_score = 1.0 if london_open or ny_open else 0.5
-```
-
-**ทำไม:** Asia session ≠ London session — pattern ต่างกัน  
-**Sin/Cos encoding:** เพราะ hour=23 และ hour=0 ใกล้กันในเวลาจริง แต่ตัวเลขห่างกัน 23
-
-## 2.3 Lab — ลองสร้าง feature ใหม่
-
-```python
-# ตัวอย่าง: bullish engulfing ratio
-def bullish_engulfing(df):
-    prev_bear = df['close'].shift(1) < df['open'].shift(1)
-    cur_bull = df['close'] > df['open']
-    bigger = df['close'] > df['open'].shift(1)
-    return (prev_bear & cur_bull & bigger).astype(int)
-```
-
-**คำถาม:** feature นี้ดีไหม? ลอง backtest ดู correlation กับ label
+> 🎓 **บทเรียนแรก:** Trading = พายเรือในพายุ — เก่งแค่ไหนก็จมได้ถ้าไม่มีเสื้อชูชีพ (Risk Management)
 
 ---
 
-# 🤖 Module 3: Machine Learning
+# 🌿 บทที่ 2: AI ทำงานยังไง?
 
-## 3.1 ปัญหา = Multi-class Classification (3 class)
+## 🧠 อธิบาย AI ใน 60 วินาที
+
+**AI** ก็เหมือน **เด็กที่ดูตัวอย่างเยอะๆ** แล้วจำ pattern ได้
+
+### ตัวอย่าง: สอน AI ดูว่าหมาหรือแมว
 
 ```
-input:  X = [22 features]   →   output: y ∈ {0=SELL, 1=HOLD, 2=BUY}
+Step 1: ป้อนรูปหมา 1,000 รูป + ป้ายว่า "หมา"
+Step 2: ป้อนรูปแมว 1,000 รูป + ป้ายว่า "แมว"
+Step 3: AI เรียนรู้ pattern (หูตั้ง=แมว, ลิ้นห้อย=หมา)
+Step 4: ให้รูปใหม่ → AI ทาย → "หมา 87%"
 ```
 
-## 3.2 Label สร้างยังไง? — Triple Barrier Method
+## 🎯 AI เทรดของเรา ทำเหมือนกัน
+
+```
+Step 1: ป้อนแท่งเทียน 300,000 แท่ง + ป้ายว่า "ขึ้น/ลง/นิ่ง"
+Step 2: AI เรียนรู้ pattern (เช่น "wick ยาวล่าง + RSI ต่ำ = ขึ้น 60%")
+Step 3: ทุก 5 นาที → ป้อนแท่งล่าสุด → AI ทาย
+Step 4: ถ้ามั่นใจ ≥ 55% → เปิดออเดอร์
+```
+
+## 📊 แต่... AI ไม่เห็น "ภาพ" — เห็นแค่ "ตัวเลข"
+
+```
+❌ AI ไม่เห็นแท่งเทียนสีเขียว/แดง
+✅ AI เห็น: open=2050, close=2052, high=2053, low=2049, volume=1500
+```
+
+**หน้าที่เรา:** แปลง OHLC → ตัวเลขที่มีความหมาย ให้ AI เข้าใจ
+นี่คือ → **Feature Engineering** (บทถัดไป!)
+
+---
+
+# 🌳 บทที่ 3: Feature Engineering — ป้อน "ตา" ให้ AI
+
+## 🔍 Feature คืออะไร?
+
+**Feature** = ตัวเลขหนึ่งตัวที่บอกอะไรเกี่ยวกับตลาด
+
+### ❌ Feature แย่
+```python
+close = 2050.30  # ราคาตอนปิด
+```
+**ปัญหา:** ปีหน้าราคาอาจเป็น 3,000 → AI งง
+
+### ✅ Feature ดี
+```python
+body_atr = (close - open) / atr   # = 0.5 (ค่าคงที่ relative)
+```
+**ดีตรงไหน:** ค่าจะอยู่ในช่วง -3 ถึง +3 เสมอ ไม่ว่าราคาเท่าไร
+
+> 💡 **กฎทอง:** Feature ที่ดี = **Normalized** (ทำให้เปรียบเทียบได้)
+
+## 🎨 9 มิติ × 38 Features = ตา 38 ตา ของ AI
+
+### 📊 มิติ 1: รูปร่างแท่งเทียน
 
 ```python
-def make_label(df, idx, tp_atr=2.0, sl_atr=1.0, lookahead=30):
-    entry = df.loc[idx, 'close']
-    atr = df.loc[idx, 'atr']
-    
-    upper = entry + tp_atr * atr   # BUY's TP
-    lower = entry - sl_atr * atr   # BUY's SL
-    
-    for i in range(idx+1, idx+lookahead+1):
-        if df.loc[i, 'high'] >= upper: return 2  # BUY win
-        if df.loc[i, 'low']  <= lower: return 0  # BUY loss = SELL win
-    return 1  # HOLD (ไม่แตะอะไรใน lookahead)
+body_atr   = (close - open) / atr
+upper_wick = (high - close) / |body|
+lower_wick = (open - low) / |body|
 ```
 
-> 💡 **Triple Barrier** = idea จาก *Marcos López de Prado* (Advances in Financial ML)
-> — labels การเทรดที่ realistic กว่า "ราคาขึ้น/ลง" เฉยๆ
+**ตีความ:** body ใหญ่ = แรงเยอะ, ไส้ยาว = มีแรงต้าน
 
-## 3.3 ทำไมเลือก XGBoost?
-
-| Algorithm | Tabular data | Speed | Tuning ง่าย | Production-ready |
-|---|---|---|---|---|
-| Linear/Logistic | ⚠️ จำกัด | ⚡⚡⚡ | ✅ | ✅ |
-| Random Forest | ✅ | ⚡ | ✅ | ✅ |
-| **XGBoost** | ✅✅ | ⚡⚡ | ✅✅ | ✅✅ |
-| Neural Network | ⚠️ overkill | ⚡ | ❌ | ⚠️ |
-| LSTM | ❌ ไม่จำเป็น | ⚡ | ❌ | ❌ |
-
-## 3.4 Training Pipeline
+### ⚡ มิติ 2: Momentum
 
 ```python
-# ขั้นตอนที่ใช้ใน model_trainer.py
-1. ดึงข้อมูล MT5: 200,000 bars ของ XAUUSD M1
-2. สร้าง features: build_features(rates) → DataFrame
-3. สร้าง labels: make_label() → 0/1/2
-4. Drop NaN: df.dropna()
-5. Balance classes: ใช้ "label_hold_to_event_ratio" จำกัด HOLD ไม่ให้เยอะเกิน
-6. Train/Test split: 80/20 (time-based, ไม่ใช่ random!)
-7. fit XGBoost: max_depth=6, n_estimators=500, learning_rate=0.05
-8. Evaluate: out-of-sample accuracy
-9. Save: joblib.dump({"model": model, "features": cols}, "xgb_hyper_model.pkl")
+velocity_5 = (close_now - close_5_ago) / atr
+rsi_7      = 100 - 100/(1 + avg_gain/avg_loss)
 ```
 
-> ⚠️ **สำคัญมาก:** Time-series ห้ามใช้ random split! ต้องเรียงตามเวลาเสมอ
-> มิฉะนั้น = data leakage (รู้อนาคตตอน train)
+**ตีความ:** RSI > 70 = overbought, < 30 = oversold
 
-## 3.5 Confidence จากไหน?
+### 📈 มิติ 3: Volume
 
 ```python
-# XGBoost มี method นี้
-proba = model.predict_proba(X)   # shape: (n_samples, 3)
-# ตัวอย่าง: proba = [[0.20, 0.30, 0.50]]
-#                    SELL  HOLD  BUY
+vol_spike = current_volume / max_volume_10_bars
+```
 
-pred = np.argmax(proba)          # = 2 (BUY)
-conf = proba[0][pred]            # = 0.50
+### 💥 มิติ 4: Breakout
+
+```python
+breakout_up = high > max(high_5_bars_ago)
+```
+
+### 🌊 มิติ 5: Volatility Regime
+
+```python
+atr_ratio = atr_14 / atr_50
+# < 0.8 = ตลาดสงบ
+# > 1.2 = ตลาดพายุ
+```
+
+### ⏰ มิติ 6: เวลา (Sin/Cos Encoding 🌀)
+
+> **ปัญหา:** ชั่วโมง 23 และ 0 ตัวเลขห่างกัน 23 → AI งง
+
+```python
+hour_sin = sin(2π × hour / 24)
+hour_cos = cos(2π × hour / 24)
+# → 23:00 และ 00:00 จะใกล้กันในวงกลม ✅
+```
+
+### 🔭 มิติ 7: Multi-Timeframe
+
+```python
+htf_trend_dir = sign(close - ema20_h1)  # +1, 0, -1
+```
+
+> 💡 "เทรด M5 แต่มองด้วยตา H1" → win rate +5-10%
+
+### 🎭 มิติ 8: Patterns
+
+```python
+pinbar_bot = (lower_wick > 2 × body) AND (upper_wick < 0.3 × body)
+# pinbar ก้น = สัญญาณกลับตัวขาขึ้น 🔨
+```
+
+### 🛡️ มิติ 9: Symmetric (กัน AI bias)
+
+> **ปัญหา:** มี `pinbar_bullish` แต่ไม่มี `pinbar_bearish` → AI bias ไป BUY
+
+**Solution:** ทุก pattern มีคู่ Bull/Bear เสมอ ✅
+
+---
+
+# 🌲 บทที่ 4: XGBoost — สมองของบอท
+
+## 🤔 XGBoost คืออะไร?
+
+**X**treme **G**radient **Boost**ing = "ต้นไม้ตัดสินใจหลายต้นรวมกัน"
+
+### 🌱 อธิบายแบบ Story
+
+```
+ต้นที่ 1 ทาย: BUY (ผิด!)
+   ↓ ดูว่าผิดเพราะอะไร
+ต้นที่ 2 ทาย: SELL (ถูก แต่ confidence ต่ำ)
+   ↓ ดูว่ายังขาดอะไร
+ต้นที่ 3 ทาย: SELL (มั่นใจมากขึ้น)
+   ↓
+... (รวม 500 ต้น)
+   ↓
+รวมเสียง → SELL 65% / HOLD 25% / BUY 10%
+```
+
+> 🎓 **Boosting:** ต้นถัดไปเรียนจาก**ความผิดพลาด**ของต้นก่อน → ฉลาดขึ้นเรื่อยๆ
+
+## ⚖️ ทำไมไม่ใช้ Deep Learning?
+
+| Algorithm | Tabular | Speed | Data น้อย | ตีความได้ |
+|---|:---:|:---:|:---:|:---:|
+| Linear | ⭐⭐ | ⚡⚡⚡ | ✅ | ✅ |
+| Random Forest | ⭐⭐⭐ | ⚡⚡ | ✅ | ⚠️ |
+| **XGBoost** ⭐ | ⭐⭐⭐⭐⭐ | ⚡⚡ | ✅ | ✅ |
+| Neural Net | ⭐⭐ | ⚡ | ❌ | ❌ |
+| LSTM | ⭐⭐ | 🐢 | ❌ | ❌ |
+
+**สรุป:** XGBoost = **เร็ว + แม่น + เบา + ตีความได้** ✨
+
+## 🎯 Training Pipeline
+
+### Step 1: สร้าง Label (Triple Barrier)
+
+```python
+def make_label(idx):
+    entry = close[idx]
+    upper = entry + 1.5 × atr   # แตะบน → BUY ชนะ
+    lower = entry - 1.5 × atr   # แตะล่าง → SELL ชนะ
+    for i in range(idx+1, idx+24):
+        if high[i] >= upper: return 2  # BUY 🟢
+        if low[i] <= lower: return 0   # SELL 🔴
+    return 1  # HOLD 🟡
+```
+
+### Step 2: Split (ห้าม Random!)
+
+```python
+# ❌ ผิด:
+train, test = random_split(data)  # leak อนาคต!
+
+# ✅ ถูก:
+train = data[:80%]   # อดีต
+test  = data[80%:]   # อนาคต
+```
+
+### Step 3: Train
+
+```python
+model = XGBClassifier(
+    max_depth=6,           # กัน overfitting
+    n_estimators=500,
+    learning_rate=0.05,    # เรียนช้าๆ
+    objective='multi:softprob'
+)
+model.fit(X_train, y_train, sample_weight=class_weights)
+```
+
+## 🔮 Inference
+
+```python
+proba = model.predict_proba(X)[0]   # [0.20, 0.30, 0.50]
+                                     #  SELL HOLD  BUY
+pred = np.argmax(proba)             # = 2 (BUY)
+conf = proba[pred]                  # = 0.50
+
+if conf >= 0.55:
+    open_buy_order()
 ```
 
 ### conf หมายถึงอะไร?
 
-`conf = "ตามข้อมูล historical, รูปแบบนี้ตามด้วย BUY ในอัตรา 50%"`
-
-| conf | ตีความ |
+| conf | แปลว่า |
 |---|---|
 | 0.33 | สุ่ม (3 class baseline) |
 | 0.50 | ดีกว่าสุ่ม 50% |
 | 0.65 | มั่นใจมาก |
-| 0.85+ | สงสัย overfitting หรือ dataset แปลก |
+| 0.85+ | ⚠️ สงสัย overfitting |
 
 ---
 
-# ⚙️ Module 4: Trading Logic
+# 🌴 บทที่ 5: Pipeline 11 ชั้น
 
-## 4.1 Main Loop Pattern
+## 🚪 เปรียบเทียบ: เข้างานต้องผ่าน 11 ด่าน
+
+```
+สัญญาณ AI 🤖
+    ↓
+🚪 ด่าน 1: AI มั่นใจพอ? (≥ threshold)
+🚪 ด่าน 2: BUY/SELL threshold ต่างกัน?
+🚪 ด่าน 3: ทวนเทรนด์ใหญ่?
+🚪 ด่าน 4: signal ติดกัน N แท่ง?
+🚪 ด่าน 5: FOMO? (วิ่งแรงเกินไป)
+🚪 ด่าน 6: tick 60s ผ่าน? (กัน fake)
+🚪 ด่าน 7: Cooldown หมด?
+🚪 ด่าน 8: Spread ปกติ?
+🚪 ด่าน 9: ข่าว High Impact?
+🚪 ด่าน 10: Max steps?
+🚪 ด่าน 11: Equity stop?
+    ↓
+✅ ทุกด่านผ่าน → เปิดออเดอร์ 🚀
+```
+
+## 🎬 ตัวอย่างจริง
+
+```
+🎯 14:33 | AI=BUY 64.2% ≥ 62.0%      ✅ ด่าน 1+2
+✅ Trend OK, EMA dist=+0.5            ✅ ด่าน 3
+✅ Multi-bar OK                       ✅ ด่าน 4
+✅ ไม่ FOMO (velocity=0.8)            ✅ ด่าน 5
+✅ Tick confirm: buy_ratio=0.61       ✅ ด่าน 6
+✅ Cooldown หมด                       ✅ ด่าน 7
+✅ Spread=14p ปกติ                    ✅ ด่าน 8
+✅ ไม่มีข่าว                          ✅ ด่าน 9
+✅ ไม่ใน HALT                         ✅ ด่าน 10+11
+
+🆕 เปิดไม้ #12345 BUY 0.01 lot @2050.30
+```
+
+> 💡 **Insight:** บอทดี ≠ ทาย AI แม่น แต่ = **กรองสัญญาณดี**
+
+---
+
+# 🎄 บทที่ 6: Recovery Engine
+
+## 💔 ปัญหา: ถ้าเสียติด ทำยังไง?
+
+### ❌ Martingale มือใหม่
+
+```
+ไม้ 1: 0.01 → เสีย $1
+ไม้ 2: 0.02 → เสีย $2
+ไม้ 3: 0.04 → เสีย $4
+...
+ไม้ 10: 5.12 → 💀 พอร์ตระเบิด
+```
+
+### ✅ Smart Recovery (SweepHunter)
 
 ```python
+floor_geo     = 0.01 × 1.7^step       # โตช้ากว่า Martingale
+floor_recover = (cum_loss + 3) ÷ 250  # พอกู้ทุน
+floor_volume  = sum_losing × 1.5      # safety net
+
+next_lot = max(geo, recover, volume)
+next_lot = min(next_lot, 0.08)        # CAP! 🛑
+```
+
+## 🧮 ตัวอย่าง
+
+```
+สถานการณ์: เสียไม้ 1 ที่ 0.01 lot → ขาดทุน $1.92
+
+floor_geo     = 0.01 × 1.7^1 = 0.017
+floor_recover = ($1.92 + $3) / $250 = 0.020 ← ใหญ่สุด
+floor_volume  = 0.01 × 1.5 = 0.015
+
+next_lot = 0.020
+
+ถ้าชนะ: +$5.00
+- ขาดทุนสะสม: $1.92
+- กำไรสุทธิ: $5.00 - $1.92 = $3.08 ✅
+```
+
+## ⏱️ Lifecycle
+
+```
+🟢 Series #25 เปิด
+├─ ไม้ 1: BUY 0.01 → 💔 LOSS -$1.92
+├─ ไม้ 2: BUY 0.02 → 💚 WIN +$5.00
+└─ 🎉 ปิด — กำไรสุทธิ +$3.08 → กลับ lot ปกติ
+```
+
+---
+
+# 🏔️ บทที่ 7: Risk Management
+
+## 📊 Math พื้นฐาน
+
+### กฎ 1: Kelly Criterion
+
+```
+optimal_fraction = (WR × avg_win - LR × avg_loss) / avg_win
+
+WR=55%, RR=2:1
+= (0.55 × 2 - 0.45 × 1) / 2 = 0.325 (32.5%)
+```
+
+⚠️ Kelly เต็ม → drawdown สูง
+**ใช้ 1/4 Kelly:** ~8% ปลอดภัยกว่า
+
+### กฎ 2: Asymmetric Loss (กฎโหด!)
+
+```
+ขาดทุน 10% → ต้องกำไร 11% เพื่อกลับมา
+ขาดทุน 50% → ต้องกำไร 100%! 😱
+ขาดทุน 90% → ต้องกำไร 900%!! 💀
+```
+
+> 🎓 **บทเรียน:** ป้องกันขาดทุนใหญ่ > เพิ่มกำไรเล็ก
+
+## 🛡️ เกราะหลายชั้น
+
+```
+ชั้น 1: SL ทันที — ไม่ปล่อยขาดทุนลอย
+ชั้น 2: max_steps — จำกัดไม้แพ้ติด
+ชั้น 3: max_lot_cap — จำกัด lot สูงสุด
+ชั้น 4: equity_stop — ปิดทุกอย่างถ้าเสียถึง %
+ชั้น 5: news_filter — หยุดก่อนข่าว
+```
+
+## 💰 Dynamic Account Scaling
+
+```python
+base_lot = (balance × risk%) / (sl_distance × $/lot)
+
+# Balance $10k, risk 0.3%, SL=$160/lot
+# → risk_usd = $30
+# → base_lot = $30/$160 = 0.1875 lot
+```
+
+✨ **สูตรเดียว → ทำงานกับพอร์ต $500 ถึง $10M ได้!**
+
+---
+
+# 🚀 บทที่ 8: Production Patterns
+
+## 🏗️ Pattern 1: Idempotency
+
+```python
+# ❌ บอทขี้แพ้:
 while True:
+    if signal: open_order()  # อาจเปิด 100 ออเดอร์/วินาที!
+
+# ✅ บอทมือโปร:
+while True:
+    if last_processed == bar_time: continue
+    last_processed = bar_time
+    if signal: open_order()
+```
+
+## 🏗️ Pattern 2: Defensive Programming
+
+```python
+for attempt in range(5):
     try:
-        self._tick()                    # 1 รอบงาน
-    except Exception as e:
-        log.exception("loop error: %s", e)   # ห้ามล้ม! log แล้วทำต่อ
-    time.sleep(0.5)                      # หายใจ
-```
-
-> 🎓 **บทเรียน:** Production loop **ห้ามตาย** เพราะ exception ใดๆ
-> ถ้า MT5 disconnect, ถ้า model error → log แล้วลองใหม่รอบหน้า
-
-## 4.2 _tick() — หัวใจของระบบ
-
-```
-┌──────────────────────────────────┐
-│ A. Periodic tasks (every 15s)     │   ← update closed trades, trail SL
-├──────────────────────────────────┤
-│ B. Heartbeat (every 30s)          │   ← log สถานะ
-├──────────────────────────────────┤
-│ C. Self-retrain check             │
-├──────────────────────────────────┤
-│ D. Halt cooldown check?           │
-├──────────────────────────────────┤
-│ E. New bar closed? → ใช่ ค่อยทำต่อ  │   ← ⭐ idempotency
-├──────────────────────────────────┤
-│ F. Build 22 features              │
-├──────────────────────────────────┤
-│ G. Already in trade? → return     │   ← single-position by design
-├──────────────────────────────────┤
-│ H. News block?                    │
-├──────────────────────────────────┤
-│ I. AI inference + filters         │
-│    (confidence, trend, cooldown)   │
-├──────────────────────────────────┤
-│ J. Calculate lot + open order     │
-└──────────────────────────────────┘
-```
-
-## 4.3 Idempotency Pattern (สำคัญ!)
-
-```python
-# E. New bar closed?
-bar_time = int(rates[closed_idx]["time"])
-if self._last_processed_bar == bar_time:
-    return                                  # ⭐ ไม่ทำซ้ำ
-self._last_processed_bar = bar_time
-```
-
-> 🎓 **Idempotency:** เรียกฟังก์ชันซ้ำ 100 ครั้ง = ผลเหมือนเรียกครั้งเดียว
-> สำคัญมากใน loop ที่รัน 2 ครั้ง/วินาที — ถ้าไม่ระวัง = เปิด order ซ้ำ!
-
-## 4.4 Order Execution — Defensive Programming
-
-```python
-# core/execution.py
-def open_market_order(...):
-    for attempt in range(retry_count):           # ลอง 5 ครั้ง
         result = mt5.order_send(request)
-        if result.retcode == TRADE_RETCODE_DONE:
-            return Result(ok=True, ...)
-        if result.retcode == TRADE_RETCODE_REQUOTE:
-            time.sleep(0.2)                      # รอ requote
+        if result and result.retcode == DONE:
+            return result
+        if result.retcode == REQUOTE:
+            time.sleep(0.2)
             continue
-        if result.retcode in PERMANENT_ERRORS:
-            return Result(ok=False, ...)         # ยอมแพ้
-    return Result(ok=False, comment="exhausted retries")
+    except Exception as e:
+        log.warning("attempt %d: %s", attempt, e)
+return None  # ยอมแพ้แบบ graceful
 ```
 
-> 🎓 **Lesson:** Trading API → flaky network เป็นเรื่องปกติ — **ต้อง retry**
-
----
-
-# 🛡️ Module 5: Risk Management
-
-## 5.1 ทำไม Risk Management สำคัญที่สุด?
-
-> "AI แม่นแค่ไหนก็ blow account ได้ ถ้าไม่มี risk management"
-> — Tom Basso, Market Wizard
-
-**สูตรพื้นฐาน:** Kelly Criterion (simplified)
-```
-optimal_fraction = (win_rate × avg_win - loss_rate × avg_loss) / avg_win
-```
-
-ถ้า win=55%, RR=2:1 → optimal_fraction ≈ 32% ของ capital  
-แต่ใน practice → ใช้ **Fractional Kelly** (เช่น 1/4 ของ optimal = 8%) เพื่อลด drawdown
-
-## 5.2 ระบบ 7 ชั้นในระบบนี้
-
-### Layer 1-3: ก่อนเปิดออเดอร์ (filters)
+## 🏗️ Pattern 3: Async I/O
 
 ```python
-if conf < 0.50:                           # Layer 1
-    return  # AI ไม่มั่นใจพอ
-if not trend_aligned(side, ema_dist):     # Layer 2
-    return  # ทวนเทรนด์
-if time_since_last_entry < 180:           # Layer 3
-    return  # cooldown
-```
-
-### Layer 4-5: market condition
-
-```python
-if spread > max_allowed_spread:           # Layer 4
-    return  # broker ขยับ spread
-if news_filter.is_blocked():              # Layer 5
-    return  # ใกล้ข่าว
-```
-
-### Layer 6-7: ป้องกันบัญชี
-
-```python
-if consecutive_losses >= max_steps:       # Layer 6
-    halt_until = now + 10 * 60   # หยุด 10 นาที
-if cum_loss >= balance * 0.07:            # Layer 7
-    close_all()                  # EQUITY STOP!
-```
-
-## 5.3 Recovery Engine — Math เบื้องหลัง
-
-### ปัญหา: เสีย $1.62 → ไม้ถัดไปต้องการเท่าไรเพื่อ recover?
-
-```
-TP เป้าหมาย = 2 × ATR = 2 × 1.6 = 3.2 USD/oz
-Profit per lot = 3.2 × 100 = $320 (ขั้นต่อ 1 lot)
-Commission = $7
-Net profit per lot = $313
-
-ต้องการ recover $1.62 + กำไร $1 = $2.62
-→ lot ที่ต้องใช้ = $2.62 / $313 = 0.0084 lot
-```
-
-แต่ระบบใช้ **3 floors** เลือกตัวสูงสุด:
-
-```python
-floor_geo     = 0.01 × 1.7^1 = 0.017     # ← ตัวนี้ชนะ
-floor_recover = 2.62 / 313 = 0.008
-floor_volume  = 0.01 × 1.3 = 0.013
-
-next_lot = max(0.017, 0.008, 0.013) = 0.017
-```
-
-**ทำไมต้อง 3 floors?**
-- `floor_geo` — บังคับให้ lot โต **เป็นเรขาคณิต** → ไม่ underfit
-- `floor_recover` — กรณีขาดทุนเยอะ → lot ต้องพอ recover เลย
-- `floor_volume` — กำไรไม้นี้ต้องมากกว่ารวม lot ที่เสียไป
-
-## 5.4 Hard Limits Math
-
-### ทำไม `max_steps = 4`?
-
-ถ้า lot_multiplier = 1.7:
-
-| Step | lot | สูญสะสม (ถ้าเสียทั้งหมด) |
-|---|---|---|
-| 1 | 0.01 (1×) | $1.62 |
-| 2 | 0.017 (1.7×) | $4.37 |
-| 3 | 0.029 (2.89×) | $9.07 |
-| 4 | 0.049 (4.91×) | $16.91 |
-| 5 | 0.083 (8.35×) | $30.45 ⚠️ |
-| 6 | 0.142 | $52.41 ⚠️⚠️ |
-
-→ step 4-5 ขาดทุน ~7-15% ของ $200 balance = **เพดาน Equity Stop**
-
-## 5.5 Dynamic Account Scaling
-
-```python
-# คำนวณ base_lot อัตโนมัติ
-risk_usd_per_trade = balance × risk_pct / 100
-base_lot = risk_usd_per_trade / (sl_distance × $/price/lot)
-
-# ตัวอย่าง: balance=$10,000, risk=0.3%, sl=$160/lot
-# → risk = $30
-# → base_lot = $30 / $160 = 0.1875 lot
-```
-
-**Insight:** สูตรเดียว → ทำงานได้ทั้ง $500 และ $10M
-
----
-
-# 🏗️ Module 6: Production Patterns
-
-## 6.1 Async DB Writes
-
-**ปัญหา:** SQLite write = blocking → หยุด trading loop ตอนเขียน DB
-
-**Solution:** worker thread + queue
-
-```python
-# core/async_db_manager.py
-class AsyncDBManager:
+class AsyncDB:
     def __init__(self):
         self.queue = Queue()
-        self.thread = Thread(target=self._worker, daemon=True)
-        self.thread.start()
-    
-    def insert_decision(self, **kwargs):
-        self.queue.put(("insert", kwargs))   # ไม่ block!
-    
+        Thread(target=self._worker, daemon=True).start()
+
+    def write(self, data):
+        self.queue.put(data)  # ไม่ block!
+
     def _worker(self):
         while True:
-            op, data = self.queue.get()
-            # ทำงานใน background
-            self._execute(op, data)
+            data = self.queue.get()
+            self._actual_write(data)
 ```
 
-> 🎓 **Lesson:** I/O = ทำใน thread แยก, computation = main thread
-
-## 6.2 Configuration Management
+## 🏗️ Pattern 4: State Persistence
 
 ```python
-# core/config.py
-class Config:
-    _data = None
-    
-    @classmethod
-    def load(cls):
-        if cls._data is None:
-            cls._data = json.load(open("config.json"))
-        return cls._data
-    
-    @classmethod
-    def section(cls, name):
-        return cls.load().get(name, {})
-```
-
-> 🎓 **Singleton pattern:** load 1 ครั้ง, ใช้ทั่วระบบ
-> แต่ระวัง testing — อาจต้อง reset
-
-## 6.3 Logging Best Practices
-
-```python
-# ผิด:
-print("trading happened")
-
-# ถูก:
-log.info("🆕 เปิดไม้ #%d | %s %.2f lot | AI %.1f%%",
-         ticket, side, lot, conf*100)
-```
-
-**ทำไม:**
-- ✅ มี timestamp อัตโนมัติ
-- ✅ Filter level ได้ (DEBUG/INFO/WARNING/ERROR)
-- ✅ เขียนลงไฟล์ + console พร้อมกัน
-- ✅ Lazy formatting (`%s` vs f-string) — ไม่ format ถ้าไม่ log
-
-## 6.4 Error Handling Tiers
-
-```python
-# Tier 1: Critical (ต้องหยุด)
-if not MT5Connector.initialise():
-    raise SystemExit("MT5 init failed")
-
-# Tier 2: Recoverable (log แล้ว retry รอบหน้า)
-try:
-    rates = MT5Connector.copy_rates(...)
-except Exception as e:
-    log.debug("rates fetch failed: %s", e)
-    return
-
-# Tier 3: Fatal-but-isolated (catch-all in loop)
-try:
-    self._tick()
-except Exception as e:
-    log.exception("loop error")   # log full traceback
-```
-
-## 6.5 State Persistence
-
-```python
-# Recovery state ต้องรอด restart
 def _save_recovery(self):
-    RECOVERY_STATE_FILE.write_text(
-        json.dumps(self.recovery.to_dict(), indent=2)
-    )
+    FILE.write_text(json.dumps(self.state))
 
 def _restore_recovery(self):
-    if RECOVERY_STATE_FILE.exists():
-        d = json.loads(RECOVERY_STATE_FILE.read_text())
-        self.recovery = RecoveryState.from_dict(d)
+    if FILE.exists():
+        self.state = json.loads(FILE.read_text())
+    else:
+        self.state = self.db.reconstruct()  # 🆕 fallback
 ```
 
-> 🎓 **Lesson:** ทุก mutable state ที่ "ห้ามหาย" ต้อง persist ลง disk
-> ถ้า bot crash หรือ restart → resume ได้
-
-## 6.6 Self-Healing — Auto Retrain
+## 🏗️ Pattern 5: Self-Healing
 
 ```python
 def _maybe_retrain(self):
-    if time_since_last < 240 * 60:        # ทุก 4 ชม.
-        return
-    if has_open_position():               # ไม่ retrain ระหว่างถือ
-        return
-    if new_trades_count < 500:            # ต้องมีข้อมูลใหม่พอ
-        return
-    train_from_mt5()                       # retrain
-    self._load_model()                     # reload
+    if no_position and 500_new_trades and 4hr_passed:
+        train_from_mt5()
+        self._load_model()  # auto adapt!
 ```
-
-> 🎓 **Lesson:** Production ML = **ตลาดเปลี่ยน → model เปลี่ยน**
-> ระบบที่ดีต้อง **adapt อัตโนมัติ**
 
 ---
 
-# 🧪 Module 7: Hands-on Lab
+# 🧪 บทที่ 9: ห้องแล็บ
 
-## 🎯 แบบฝึกหัด 10 ข้อ (เรียงจากง่าย → ยาก)
+> 💪 **อ่านเฉยๆไม่พอ — ลงมือทำถึงจะเข้าใจ!**
 
-### Lab 1 ⭐ — เปลี่ยน symbol จาก XAUUSD เป็น BTCUSD
-```
-แก้: config.json "symbol": "BTCUSD"
-รัน: python run.py train
-สังเกต: features ทำงานได้ไหม? accuracy เปลี่ยนยังไง?
+### 🟢 Lab 1: เปลี่ยน Symbol (10 นาที)
+```json
+"trading": { "symbol": "EURUSD" }
 ```
 
-### Lab 2 ⭐ — ปรับ risk_per_trade_pct
-```
-ลอง: 0.10, 0.50, 1.00
-สังเกต: lot ที่บอทเปิดเปลี่ยนยังไง?
-คำถาม: ที่ %ไหนพอดีกับ DD ที่คุณรับได้?
+### 🟢 Lab 2: ปรับความเสี่ยง (5 นาที)
+```json
+"account_scaling": { "risk_per_trade_pct": 0.50 }
 ```
 
-### Lab 3 ⭐⭐ — เพิ่ม feature ใหม่ "MACD signal"
+### 🟢 Lab 3: ดู Database (15 นาที)
 ```python
-# ใน m1_hyper_pipeline.py
-df["macd_signal"] = ...  # คำนวณ MACD
-FEATURE_COLUMNS.append("macd_signal")
-```
-รัน train ใหม่ → accuracy ดีขึ้นไหม?
-
-### Lab 4 ⭐⭐ — เพิ่ม timeframe เป็น M5
-```
-แก้ config: "timeframe": "M5"
-สังเกต: spread กิน profit % น้อยลงไหม?
+import sqlite3
+conn = sqlite3.connect("data/db/hyper_trades.sqlite")
+for row in conn.execute("SELECT * FROM decisions LIMIT 10"):
+    print(row)
 ```
 
-### Lab 5 ⭐⭐ — เขียน unit test
+### 🟡 Lab 4: เพิ่ม Feature ใหม่ (30 นาที)
 ```python
-# tests/test_recovery.py
-def test_geometric_floor():
-    rs = RecoveryState(consecutive_losses=2)
-    # คำนวณว่า floor_geo = 0.01 × 1.7^2 = 0.029
-    assert ...
+df["my_feature"] = df["close"].pct_change(3)
+FEATURE_COLUMNS.append("my_feature")
 ```
 
-### Lab 6 ⭐⭐⭐ — สร้าง dashboard
-```
-ใช้ Streamlit หรือ Flask
-แสดง: balance over time, win rate, today's PnL
-ดึงจาก: data/db/hyper_trades.sqlite
-```
-
-### Lab 7 ⭐⭐⭐ — Walk-forward backtest
+### 🟡 Lab 5: เขียน Unit Test (45 นาที)
 ```python
-# split data เป็น 12 เดือน
-# train 11 เดือน → test เดือนที่ 12 → walk forward
-# วัด: monthly Sharpe, max DD, win rate
+def test_lot_calculation():
+    bot = HyperBot()
+    bot.recovery.consecutive_losses = 2
+    bot.recovery.cumulative_loss_usd = 5.0
+    lot = bot._compute_lot_for_recovery(spec, atr=1.6)
+    assert 0.02 < lot < 0.10
 ```
 
-### Lab 8 ⭐⭐⭐⭐ — Hyperparameter tuning
+### 🟡 Lab 6: สร้าง Dashboard (2 ชม.)
+```python
+import streamlit as st
+import pandas as pd
+import sqlite3
+
+conn = sqlite3.connect("data/db/hyper_trades.sqlite")
+df = pd.read_sql("SELECT * FROM decisions WHERE status IN ('WIN','LOSS')", conn)
+
+st.title("📊 SweepHunter Dashboard")
+st.metric("Total Trades", len(df))
+st.metric("Win Rate", f"{(df['status']=='WIN').mean()*100:.1f}%")
+st.line_chart(df['pnl'].cumsum())
+```
+
+### 🟠 Lab 7: Walk-Forward Backtest (3 ชม.)
+แบ่ง 12 เดือน → train 11 → test 1 → เลื่อน
+
+### 🟠 Lab 8: Hyperparameter Tuning (2 ชม.)
 ```python
 from sklearn.model_selection import GridSearchCV
-params = {
-    'max_depth': [4, 6, 8],
-    'n_estimators': [300, 500, 800],
-    'learning_rate': [0.03, 0.05, 0.1]
-}
-# หา combo ที่ดีที่สุด
+params = {'max_depth':[4,6,8], 'n_estimators':[300,500,800]}
+grid = GridSearchCV(XGBClassifier(), params, cv=5)
+grid.fit(X, y)
+print(grid.best_params_)
 ```
 
-### Lab 9 ⭐⭐⭐⭐ — Multi-symbol portfolio
-```
-รัน 3 instances: XAUUSD, EURUSD, GBPUSD
-แต่ละตัวมี config + DB แยก
-รวม risk: max ใช้ 50% ของ balance / symbol
-```
+### 🔴 Lab 9: Multi-Symbol Bot (4 ชม.)
+รัน 3 instances: XAUUSD + EURUSD + GBPUSD
 
-### Lab 10 ⭐⭐⭐⭐⭐ — แทน XGBoost ด้วย LSTM/Transformer
+### 🔴 Lab 10: แทน XGBoost ด้วย Neural Network (5 ชม.)
 ```python
-import torch
-class TradingLSTM(nn.Module):
+import torch.nn as nn
+
+class TradingNN(nn.Module):
     def __init__(self):
-        self.lstm = nn.LSTM(input_size=22, hidden_size=64, num_layers=2)
-        self.fc = nn.Linear(64, 3)
-    ...
-```
-**คำถาม:** ดีขึ้นไหม? trade-off คืออะไร?
+        super().__init__()
+        self.fc1 = nn.Linear(38, 64)
+        self.fc2 = nn.Linear(64, 32)
+        self.fc3 = nn.Linear(32, 3)
 
----
-
-# 📚 Module 8: บทเรียนสำคัญ (Key Takeaways)
-
-## 8.1 ML Lessons
-
-✅ **Feature engineering > model selection** — features ดี + model ธรรมดา > features แย่ + model ซับซ้อน
-
-✅ **Time-series → ห้าม random split** — ต้อง chronological
-
-✅ **Class imbalance ใน trading** — HOLD เยอะกว่า BUY/SELL → ต้อง balance
-
-✅ **Regime change** — model ที่ดีปีที่แล้ว อาจแย่ปีนี้ → ต้อง retrain
-
-✅ **Confidence calibration** — `predict_proba` อาจไม่ใช่ probability จริงๆ
-
-## 8.2 Trading Lessons
-
-✅ **Risk Management > Strategy** — บัญชีเสีย 50% ต้องกำไร 100% ถึงจะกลับมา
-
-✅ **Win Rate ≠ Profit** — 60% WR กับ RR 1:0.5 ขาดทุน, 40% WR กับ RR 1:3 กำไร
-
-✅ **Costs matter** — spread + commission กิน scalping ก่อนเริ่ม
-
-✅ **Cooldown after losses** — เสียติด = market regime แปลก, อย่ารีบเข้า
-
-## 8.3 Software Engineering Lessons
-
-✅ **Defensive coding** — สมมติทุก API call จะ fail
-
-✅ **State persistence** — ทุก mutable state สำคัญ ต้อง save
-
-✅ **Idempotency** — design ให้เรียกซ้ำได้
-
-✅ **Async I/O** — ห้ามให้ DB write block trading
-
-✅ **Logging is gold** — debug ได้, audit ได้, sell ได้ (UX!)
-
-✅ **Config-driven** — ทุกค่า magic อยู่ใน JSON ไม่ใช่ใน code
-
-## 8.4 Production Lessons
-
-✅ **Monitor everything** — heartbeat log, DB metrics, model accuracy
-
-✅ **Fail-safe defaults** — ถ้า config หาย → ค่า default ที่ปลอดภัย
-
-✅ **Hard limits everywhere** — `max_lot`, `max_steps`, `equity_stop`
-
-✅ **Dry-run first** — Demo account 2-4 weeks ก่อน live
-
----
-
-# 🎓 ทรัพยากรเพิ่มเติม
-
-## หนังสือแนะนำ
-- 📘 *Advances in Financial Machine Learning* — Marcos López de Prado
-- 📘 *Machine Trading* — Ernest Chan
-- 📘 *Trading Systems and Methods* — Perry Kaufman
-- 📘 *Hands-On Machine Learning* — Aurélien Géron
-
-## คอร์สออนไลน์
-- 🎥 [Coursera: ML for Trading (Tucker Balch)](https://www.coursera.org/learn/machine-learning-trading)
-- 🎥 [QuantConnect: Tutorial](https://www.quantconnect.com/learning)
-
-## Libraries ที่ควรรู้
-- `pandas`, `numpy`, `scikit-learn` — basic
-- `xgboost`, `lightgbm`, `catboost` — gradient boosting
-- `MetaTrader5`, `ccxt` — broker APIs
-- `vectorbt`, `backtesting.py`, `zipline` — backtesting
-- `optuna` — hyperparameter tuning
-
-## Communities
-- r/algotrading (Reddit)
-- QuantConnect Forum
-- Discord: Algorithmic Trading
-
----
-
-# 🏁 สิ่งที่ควรรู้ก่อนใช้จริง
-
-## ✅ Checklist ก่อน Live
-
-- [ ] ทดสอบบน Demo อย่างน้อย 2-4 สัปดาห์
-- [ ] เข้าใจทุก config ใน `config.json`
-- [ ] รู้วิธี emergency stop (Ctrl+C, kill process, MT5 disable)
-- [ ] Backup `data/db/` รายวัน
-- [ ] ตั้ง alert (Discord/Telegram) เมื่อ EQUITY STOP
-- [ ] อ่าน source code อย่างน้อย 1 รอบ
-- [ ] เข้าใจ recovery math (อย่าใช้ถ้ายังคำนวณไม่ถูก)
-- [ ] ตั้ง risk_per_trade_pct ตาม risk tolerance ของตัวเอง
-- [ ] มี exit plan (รวมถึง psychological — เลิกเมื่อไร?)
-
-## ⚠️ Red Flags ในตลาด → หยุดบอททันที
-- 🚨 ข่าว Black Swan (war, central bank emergency)
-- 🚨 Spread กว้างผิดปกติ (broker liquidity issue)
-- 🚨 บอท trade ผิดทาง 5 ไม้ติด แม้ filter ผ่านหมด
-- 🚨 Model self-test fail (`mean_max < 0.40`)
-
----
-
-# 🆕 Module Updates V2 — Anti-Bias & Robustness
-
-## 1️⃣ Multi-Timeframe Features (MTF)
-
-### ปัญหาที่แก้
-M5 มองสั้น → ไม่เห็น context ใหญ่ → entry ตรงข้าม trend M15/H1
-
-### สูตร
-```python
-# resample base TF เป็น HTF (M5 → M15 = multiplier 3 | M5 → H1 = multiplier 12)
-htf_open  = first per N bars
-htf_high  = max per N bars
-htf_low   = min per N bars
-htf_close = last per N bars
-
-# คำนวณ EMA20 + ATR14 + RSI14 บน HTF แล้ว forward-fill กลับ base TF
-htf_trend_dir   = sign((close - ema20) / atr)        # +1 / 0 / -1
-htf_ema_dist    = (close - ema20) / atr              # signed distance
-htf_rsi_norm    = rsi/100 - 0.5                      # centered around 0
-```
-
-### Features (6 ตัว)
-| Column | Range | ตีความ |
-|---|---|---|
-| `htf1_trend_dir` | -1, 0, +1 | ทิศ trend M15 |
-| `htf1_ema_dist_atr` | ~-3.0 ถึง +3.0 | ห่าง EMA M15 กี่ ATR |
-| `htf1_rsi_norm` | -0.5 ถึง +0.5 | RSI M15 (centered) |
-| `htf2_*` | (เหมือนกัน) | สำหรับ H1 |
-
-### ทำไม robust?
-- ใช้ data ที่มีอยู่แล้ว (M5) — ไม่ต้องดึง MT5 ซ้ำ
-- Auto-adapt ตาม base TF ใน config (`trading.timeframe`)
-
----
-
-## 2️⃣ Symmetric Pattern Features (10 ตัว)
-
-### ปัญหาที่แก้
-Features เก่าหลายตัว **bias ไปทางใดทางหนึ่ง** เช่น `ema_dist_atr` ในตลาด uptrend จะเป็นบวกมาก → model เรียนว่า "บวก = BUY ดี" → biased
-
-### กลยุทธ์: ทุก feature symmetric
-ทำงาน **เท่ากัน** สำหรับ BUY และ SELL — model ไม่มีเหตุผลที่จะ bias
-
-| Feature | ตรวจอะไร | คล้าย Pattern อะไร |
-|---|---|---|
-| `pat_engulf_bull/bear` | bull/bear engulfing | Reversal signal |
-| `pat_pinbar_top/bot_5` | wick rejection 5 bars | Hammer / Shooting star |
-| `pat_inside_bar` | h<prev_h AND l>prev_l | Consolidation |
-| `pat_outside_bar` | h>prev_h AND l<prev_l | Volatility expansion |
-| `pat_range_expansion_3` | range / avg(3) | Breakout potential |
-| `pat_swept_high/low_5` | sweep + reverse | Liquidity grab (smart money) |
-| `pat_consec_streak` | signed streak length | Exhaustion timing |
-
-### ผลลัพธ์
-```
-Before patterns:  BUY recall=8%   SELL recall=79%   gap=70%  ❌
-After patterns:   BUY recall=39%  SELL recall=46%   gap=7%   ✅
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        return torch.softmax(self.fc3(x), dim=1)
 ```
 
 ---
 
-## 3️⃣ Tick-Level Confirmation Engine
+# 🎓 บทที่ 10: บทเรียนชีวิต
 
-### ปัญหาที่แก้
-M5 candle ปิดแล้วเห็น signal ดี **แต่ตอนยิงจริงราคาวิ่งไปไกลแล้ว** = late entry → reverse
+## 💡 บทเรียน ML
 
-### กระบวนการ
-```
-ก่อนเปิดออเดอร์ทุกครั้ง:
-1. ดึง tick 60 วินาทีย้อนหลัง (mt5.copy_ticks_range)
-2. คำนวณ 5 metrics:
-   - buy_tick_ratio       (up-tick vs down-tick)
-   - spread_zscore        (recent spread vs baseline)
-   - stop_hunt_score      (peak retracement)
-   - velocity_burst       (max single-tick / avg)
-   - micro_trend          (linear regression slope)
-3. ถ้ามีอะไรผิด → SKIP การเปิดออเดอร์
-```
+| # | บทเรียน |
+|:-:|---|
+| 1 | **Feature ดี > Model ซับซ้อน** |
+| 2 | **Time-series ห้าม random split** — leak อนาคต = backtest หลอก |
+| 3 | **Regime change** → ต้อง retrain |
+| 4 | **Class imbalance** → balance ก่อน train |
+| 5 | **Confidence ≠ Probability** — 90% อาจคือ overfit |
 
-### สูตร Stop Hunt Detection
-```python
-# ราคาวิ่งสุดทางหนึ่งแล้วกลับเกือบครึ่ง = ไล่ stop ของ retail
-peak_high = max(mids)
-peak_low = min(mids)
-range = peak_high - peak_low
-final_pos = mids[-1]
+## 💰 บทเรียน Trading
 
-retrace_from_high = (peak_high - final_pos) / range
-retrace_from_low = (final_pos - peak_low) / range
-stop_hunt_score = max(retrace_from_high, retrace_from_low)
+| # | บทเรียน |
+|:-:|---|
+| 1 | **Risk Management > Strategy** |
+| 2 | **Win Rate ≠ Profit** — 60% WR + RR 0.5 = ขาดทุน |
+| 3 | **Costs matter** — spread กิน scalping |
+| 4 | **Cooldown หลังเสีย** — regime แปลก อย่ารีบ |
+| 5 | **อยู่รอด > กำไรมาก** |
 
-# ถ้า > 0.7 = ราคาแหลมแล้วกลับ 70%+ ของ range = น่าจะเป็น stop hunt
-```
+## 💻 บทเรียน Software
 
----
+| # | บทเรียน |
+|:-:|---|
+| 1 | **Defensive coding** — สมมติทุก API จะ fail |
+| 2 | **State persistence** — restart ต้อง resume ได้ |
+| 3 | **Idempotency** — เรียกซ้ำต้องไม่พัง |
+| 4 | **Async I/O** — DB ห้าม block trading |
+| 5 | **Logging is gold** |
+| 6 | **Config-driven** — magic number อยู่ใน JSON |
 
-## 4️⃣ Per-Direction Confidence Threshold
+## 🌟 บทเรียนชีวิต
 
-### ปัญหาที่แก้
-Live data: BUY accuracy 21% / SELL accuracy 33% → ใช้ threshold เดียว = ไม่ fair
-
-### Solution
-```json
-"directional_threshold": {
-  "enabled": true,
-  "buy": 0.55,   // BUY ต้องมั่นใจ 55%+ (กรองเข้ม)
-  "sell": 0.42   // SELL ต้องมั่นใจ 42%+ (ผ่อนปรน)
-}
-```
-
-### Code
-```python
-if dir_thr_cfg.get("enabled", False):
-    if side == "BUY":
-        thr = float(dir_thr_cfg.get("buy", thr))
-    elif side == "SELL":
-        thr = float(dir_thr_cfg.get("sell", thr))
-```
-
-→ ปรับ threshold ตามข้อมูลจริงจาก `review_trades.py`
+> **"Trading Bot สอนคุณมากกว่าวิธีหาเงิน:**
+> มันสอน **วินัย** — ตลาดลงโทษคนไม่มีวินัยทันที
+> มันสอน **ความถ่อมตน** — คุณคิดว่าฉลาด แต่ตลาดฉลาดกว่า
+> มันสอน **ความอดทน** — edge เล็ก × เวลายาว = ความรวย
+> มันสอน **การยอมรับ** — แพ้บ่อย ต้อง move on ให้ไว"
 
 ---
 
-## 5️⃣ Class Weight Override (Training Bias Fix)
+## 📚 อ่านต่อ
 
-### กลไก
-sklearn ปกติใช้ `compute_sample_weight("balanced")` → equal weight per class
+### 📖 หนังสือ
+- 📕 *Advances in Financial Machine Learning* — Marcos López de Prado ⭐⭐⭐⭐⭐
+- 📕 *Machine Trading* — Ernest Chan
+- 📕 *Hands-On Machine Learning* — Aurélien Géron
 
-แต่ถ้า model มี directional bias → ปรับ multiplier ต่อ class:
+### 🎥 คอร์ส
+- Coursera: *ML for Trading* (Tucker Balch)
+- QuantConnect Learning Center (ฟรี)
 
-```python
-sw_tr = compute_sample_weight(class_weight="balanced", y=y_tr)
-
-cw_override = cfg_a.get("class_weight_overrides")  # {"0": 1.0, "1": 1.0, "2": 0.7}
-if cw_override:
-    for cls_str, mult in cw_override.items():
-        cls_int = int(cls_str)
-        mask = (y_tr.values == cls_int)
-        sw_tr[mask] = sw_tr[mask] * float(mult)
-```
-
-### ตีความ Multiplier
-| Multiplier | ผล |
+### 🛠️ Tools
+| Level | Library |
 |---|---|
-| `> 1.0` | model "เห็น class นี้สำคัญ" → ทาย class นี้บ่อยขึ้น |
-| `= 1.0` | balanced (default) |
-| `< 1.0` | model "เห็น class นี้สำคัญน้อย" → ทาย class นี้น้อยลง |
-
-### ⚠️ Trade-off
-- ถ้าไม่ใช้ pattern features → ต้อง override (เช่น BUY=0.7) เพื่อแก้ bias
-- ถ้าใช้ pattern features → ใช้ 1.0 ทุก class ได้
+| 🟢 พื้นฐาน | `pandas`, `numpy`, `scikit-learn`, `matplotlib` |
+| 🟡 กลาง | `xgboost`, `lightgbm`, `MetaTrader5`, `optuna` |
+| 🔴 ขั้นสูง | `pytorch`, `vectorbt`, `qlib` |
 
 ---
 
-## 6️⃣ Auto-Reconstruct Recovery State จาก DB
+## ✅ Checklist ก่อนใช้งานจริง
 
-### ปัญหาที่แก้
-ถ้า bot crash + ลบ `recovery_state.json` → restart = state รีเซ็ต = consecutive_losses = 0  
-แต่ MT5 ยังมี position ค้าง → ปิดแล้วนับเป็น loss #1 (ผิด!)
-
-### Solution
-```python
-def _restore_recovery(self):
-    if RECOVERY_STATE_FILE.exists():
-        # load from file (fast path)
-        return
-
-    # 🆕 Fallback: query DB
-    db_state = self.db.find_open_series_state(self.symbol)
-    if db_state and db_state["consecutive_losses"] > 0:
-        self.recovery.series_id = db_state["series_id"]
-        self.recovery.consecutive_losses = db_state["consecutive_losses"]
-        self.recovery.cumulative_loss_usd = db_state["cumulative_loss_usd"]
-        # ... reconstruct fully
-```
-
-### DB Query
-```sql
--- หา latest unsettled series
-SELECT id, side FROM series
-WHERE symbol=? AND status='OPEN'
-ORDER BY id DESC LIMIT 1;
-
--- นับ LOSS decisions ใน series
-SELECT COUNT(*) n, SUM(ABS(pnl)) loss_sum, SUM(volume) vol_sum
-FROM decisions WHERE series_id=? AND status='LOSS';
-```
+- [ ] ทดสอบ Demo อย่างน้อย **2-4 สัปดาห์** 📅
+- [ ] เข้าใจทุก config ใน `config.json` ⚙️
+- [ ] รู้วิธี Emergency Stop 🛑
+- [ ] Backup `data/db/` รายวัน 💾
+- [ ] เข้าใจสูตร Recovery Math 🧮
+- [ ] ตั้ง risk ตามที่ตัวเองรับได้ 🛡️
+- [ ] อ่าน source code อย่างน้อย 1 รอบ 📖
+- [ ] มี Exit Plan 🎯
 
 ---
 
-## 7️⃣ Past Trade Reviewer (`review_trades.py`)
+## 🚨 Red Flags → หยุดบอททันที!
 
-### Features
-
-```
-🎯 Win/Loss + Net P/L + Real RR + Break-even WR
-🚨 High-Confidence LOSSES (top 10)
-📈 WR per Direction (BUY vs SELL)
-🕐 WR per Hour UTC (top 6 hours)
-⚡ WR per ATR regime (LOW/MID/HIGH)
-📏 WR per Spread tier (wide vs narrow)
-💔 Loss Streak distribution
-♻️ Recovery Series outcomes
-💡 Auto-recommendations
-```
-
-### ใช้ตอนไหน
-1. ✅ หลังเก็บ trades 50+ ไม้
-2. ✅ ก่อนปรับ config (เพื่อ data-driven decision)
-3. ✅ หลัง retrain เพื่อตรวจ regime change
-
----
-
-# 📋 Workflow แนะนำ
-
-```
-1. เริ่มจาก Demo $500
-2. Train model: python run.py train
-3. Run bot: python run.py bot
-4. หลัง 1-3 วัน (50+ trades): python review_trades.py
-5. ดู:
-   - BUY vs SELL gap > 20%? → ปรับ class_weight หรือ directional_threshold
-   - High-conf LOSS > 30%? → กรอง features ที่หลอก หรือเพิ่ม tick filter
-   - Loss streak > 5? → ลด max_steps หรือ enable session filter
-6. กลับไปข้อ 2 (retrain) ด้วย config ใหม่
-7. Repeat จนกว่า WR > 50% และ Real RR > 1.0
-```
-
----
-
-# 🎯 Final Words
-
-> **"การสร้าง trading bot ไม่ใช่เกี่ยวกับการทำให้ AI แม่น 100%
-> แต่เกี่ยวกับการสร้างระบบที่ **อยู่รอด** ในตลาดได้ในทุกสภาพ"**
-
-ถ้าคุณอ่านเอกสารนี้จบ + ทำ Lab ครบ 10 ข้อ → คุณได้:
-- ✅ ความเข้าใจ ML pipeline สำหรับ time-series
-- ✅ Production patterns (async, error handling, state)
-- ✅ Risk management math
-- ✅ Trading domain knowledge
-
-ทักษะเหล่านี้ใช้ได้ทั้งกับ:
-- 💼 งาน Quant Developer
-- 🎓 Research papers
-- 🚀 Startup ของตัวเอง
-- 💰 Personal investing
+- 🚨 ข่าว Black Swan (สงคราม, central bank emergency)
+- 🚨 Spread กว้างผิดปกติ
+- 🚨 บอทเทรดผิดทาง 5 ไม้ติด
+- 🚨 Model self-test fail
+- 🚨 Equity Stop trigger บ่อยกว่า 1 ครั้ง/สัปดาห์
 
 ---
 
 <div align="center">
 
-**📚 Happy Learning! 🚀**
+## 🎯 คำคมส่งท้าย
+
+> **"AI ไม่ใช่หมอดู — มันแค่จำ pattern จากอดีต**
+> **Trading bot ที่ดีไม่ใช่บอทที่ทำกำไรมากที่สุด**
+> **แต่เป็นบอทที่ อยู่รอด ได้ทุกสภาพตลาด"** 🛡️
+
+---
+
+### 📚 Happy Learning! 🚀
 
 *"แค่อ่านไม่พอ — ต้องลงมือทำ ผิดพลาด แล้วเรียนรู้"*
 
-— SweepHunter Team
+**— SweepHunter Team —**
+
+<sub>Made with 🧠 + ☕ + ❤️ for curious minds</sub>
 
 </div>
