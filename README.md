@@ -41,21 +41,23 @@
 
 ---
 
-## 🧠 AI Engine — XGBoost + 38 Features
+## 🧠 AI Engine — XGBoost + 48 Features (V3)
 
-โมเดลเรียนรู้จากแท่ง **M5** ย้อนหลัง **300,000 แท่ง** ครอบคลุม **9 มิติ**:
+โมเดลเรียนรู้จากแท่ง **M5** ย้อนหลัง **300,000 แท่ง** ครอบคลุม **11 มิติ**:
 
-| มิติ | ตัวอย่าง Features |
-|---|---|
-| 📊 **Candle Anatomy** | body_atr, upper/lower wick ratios, direction |
-| ⚡ **Fast ATR** | wicks / fast_ATR (วัด volatility ระยะสั้น) |
-| 🚀 **Momentum** | velocity_2/5, RSI_7, EMA-distance |
-| 📈 **Volume Surge** | vol_accel_3, vol_spike_10 |
-| 💥 **Micro Breakout** | breakout up/down 5 bars, near high/low |
-| 🌊 **Volatility Regime** | ATR ratio (calm vs storm) |
-| ⏰ **Time Encoding** | sin/cos hour, session score |
-| 🔭 **Multi-Timeframe** | M15 + H1 trend, ema_dist, rsi_norm |
-| 🎭 **Patterns** | engulfing, pinbar, inside/outside, sweep, streak |
+| มิติ | # | ตัวอย่าง Features |
+|---|:-:|---|
+| 📊 **Candle Anatomy** | 4 | body_atr, upper/lower wick ratios, direction |
+| ⚡ **Fast ATR** | 3 | wicks / fast_ATR (วัด volatility ระยะสั้น) |
+| 🚀 **Momentum** | 5 | velocity_2/5, RSI_7, EMA-distance, ret_1 |
+| 📈 **Volume Surge** | 2 | vol_accel_3, vol_spike_10 |
+| 💥 **Micro Breakout** | 4 | breakout up/down 5 bars, near high/low |
+| 🌊 **Volatility Regime** | 1 | ATR ratio (calm vs storm) |
+| ⏰ **Time Encoding** | 3 | sin/cos hour, session score |
+| 🔭 **Multi-Timeframe** | 6 | M15 + H1 trend, ema_dist, rsi_norm |
+| 🎭 **Patterns** | 10 | engulfing, pinbar, inside/outside, sweep, streak |
+| 📍 **S/R Levels** (V3) | 5 | dist_pivot_high/low_50, dist_round_50/100, range_position_20 |
+| ⚙️ **Momentum Dynamics** (V3) | 5 | velocity_accel, body_accel, wick_imbalance, pattern_bull/bear_5 |
 
 **Output:** `[P(SELL), P(HOLD), P(BUY)]` → เทรดเฉพาะ confidence ≥ threshold
 
@@ -169,7 +171,7 @@ SweepHunter/
 │
 ├── core/
 │   ├── 🧠 xauusd_hyper_core.py     Main loop + Recovery + Filters
-│   ├── 📈 m1_hyper_pipeline.py     38 Features (Micro+MTF+Patterns)
+│   ├── 📈 m1_hyper_pipeline.py     48 Features V3 (Micro+MTF+Patterns+S/R+MomDyn)
 │   ├── 🎓 model_trainer.py         XGBoost training + class weights
 │   ├── 🔬 tick_analyzer.py         Tick-level confirmation
 │   ├── ⚡ execution.py              IOC orders + Spread + Retry

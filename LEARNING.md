@@ -118,7 +118,9 @@ body_atr = (close - open) / atr   # = 0.5 (ค่าคงที่ relative)
 
 > 💡 **กฎทอง:** Feature ที่ดี = **Normalized** (ทำให้เปรียบเทียบได้)
 
-## 🎨 9 มิติ × 38 Features = ตา 38 ตา ของ AI
+## 🎨 11 มิติ × 48 Features = ตา 48 ตา ของ AI
+
+> 📌 ในบทนี้จะอธิบาย **9 มิติพื้นฐาน** ก่อน — ส่วน **มิติ S/R Levels** และ **Momentum Dynamics** (เพิ่มใน V3) ดูรายละเอียดที่ [`FEATURE_ENGINEERING_V2.md`](FEATURE_ENGINEERING_V2.md)
 
 ### 📊 มิติ 1: รูปร่างแท่งเทียน
 
@@ -579,7 +581,7 @@ import torch.nn as nn
 class TradingNN(nn.Module):
     def __init__(self):
         super().__init__()
-        self.fc1 = nn.Linear(38, 64)
+        self.fc1 = nn.Linear(48, 64)
         self.fc2 = nn.Linear(64, 32)
         self.fc3 = nn.Linear(32, 3)
 
