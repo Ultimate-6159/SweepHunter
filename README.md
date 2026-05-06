@@ -1,162 +1,159 @@
-# 🏆 SweepHunter AI — XAUUSD Hyper-Frequency Trading Bot
+# 🏆 SweepHunter AI
 
-> **AI-Driven Micro-Scalping + Sequential Loss Recovery Engine สำหรับทอง XAUUSD บน MetaTrader 5**
->
-> ระบบเทรดอัตโนมัติระดับโปร — XGBoost ทำนายทิศทาง + Recovery Engine กู้ทุนอัจฉริยะ + ป้องกันความเสี่ยงหลายชั้น
+> **บอทเทรดทอง XAUUSD อัตโนมัติบน MetaTrader 5**
+> AI ทำนายทิศทาง (XGBoost) + Recovery Engine กู้ทุนแบบมีสติ + ระบบป้องกันความเสี่ยงหลายชั้น
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)]()
-[![MT5](https://img.shields.io/badge/MetaTrader-5-orange)]()
-[![ML](https://img.shields.io/badge/AI-XGBoost-green)]()
-[![License](https://img.shields.io/badge/License-Commercial-red)]()
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" />
+  <img src="https://img.shields.io/badge/MetaTrader-5-FF6F00?logo=metatrader&logoColor=white" />
+  <img src="https://img.shields.io/badge/AI-XGBoost-00A86B" />
+  <img src="https://img.shields.io/badge/DB-SQLite-003B57?logo=sqlite&logoColor=white" />
+  <img src="https://img.shields.io/badge/Symbol-XAUUSD-FFD700" />
+  <img src="https://img.shields.io/badge/Status-Production-success" />
+</p>
 
 ---
 
-## 💡 ทำไมต้อง SweepHunter?
+## 🎯 ระบบทำอะไรได้บ้าง? (อธิบายแบบง่ายๆ)
 
-| ปัญหาที่นักเทรดเจอ | SweepHunter แก้ยังไง |
+ลองนึกภาพว่าคุณมี "เทรดเดอร์มืออาชีพ" ทำงานให้ตลอด 24 ชั่วโมง โดย:
+
+1. 🧠 **มองตลาด** ทุก 0.5 วินาที — พอแท่งเทียน M5 ปิด ให้ AI ทำนายว่า **ขึ้น / ลง / นิ่ง**
+2. 🎯 **เปิดออเดอร์** เฉพาะตอนที่ AI มั่นใจสูง (≥ 55%) และผ่านตัวกรอง 11 ชั้น
+3. 🛡️ **ตั้ง SL/TP** อัตโนมัติจาก ATR (TP = 1.6×ATR, SL = 1.2×ATR)
+4. ♻️ **ถ้าเสีย** — คำนวณ lot ใหม่ให้ "ไม้ถัดไปชนะแล้วกู้ทุนคืนได้" (ไม่ใช่ Martingale บ้าๆ)
+5. ✋ **ถ้าเสียติดเกิน max_steps** → ปิด series นั้น เริ่มใหม่
+6. 📊 **บันทึกทุกการเทรด** ลง SQLite + retrain โมเดลทุก 500 ออเดอร์ใหม่
+
+---
+
+## ✨ จุดเด่นที่ต่างจากบอททั่วไป
+
+| ❌ บอททั่วไป | ✅ SweepHunter |
 |---|---|
-| ❌ มือเทรดช้า ตามตลาด M1 ไม่ทัน | ✅ AI ทำงาน 24/5 ตัดสินใจใน 0.5 วินาที |
-| ❌ เสีย streak ติดแล้วล้างพอร์ต | ✅ **3-Floor Recovery Engine** กู้ทุน + กำไรเพิ่ม |
-| ❌ Martingale ทั่วไป = lot โตจน blow account | ✅ **Hard Limits 3 ชั้น** (max_steps, max_lot_cap, equity_stop) |
-| ❌ AI ทาย "ขึ้น" แต่ครั้งเดียวก็เสียยับ | ✅ **Trend Filter + Confidence Threshold + Cooldown** |
-| ❌ Trail SL ปิดเร็ว กำไรไม่คุ้ม | ✅ **Smart Trailing** ปิดอัตโนมัติระหว่าง recovery |
-| ❌ ไม่รู้บอททำอะไร log อ่านไม่รู้เรื่อง | ✅ **Heartbeat ภาษาไทย** + Emoji เล่าเรื่อง |
-| ❌ พอร์ตโตแล้วต้องแก้ config ใหม่ทุกครั้ง | ✅ **Dynamic Account Scaling** $500 → $10M+ อัตโนมัติ |
+| Martingale ×2 ทุกครั้ง → ระเบิดพอร์ต | **3-Floor Recovery** เลือก lot จาก max(geo, recover-target, volume) |
+| ใช้ AI ทาย แต่เปิดทันที | **กรอง 11 ชั้น** (Confidence + Trend + Tick + Spread + News + ...) |
+| AI bias ไป BUY อย่างเดียว | **Per-Direction Threshold** — ตั้ง threshold BUY/SELL คนละค่า |
+| ต้องแก้ lot เองทุกครั้งพอร์ตโต | **Dynamic Account Scaling** — รองรับ $500 → $10M+ อัตโนมัติ |
+| เสีย state ตอน restart | **Recovery State Persist** + DB Auto-Reconstruct |
+| Log งงๆ อ่านยาก | **Heartbeat ภาษาไทย + Emoji** เล่าเรื่องเหมือนคนคุย |
+| Fake signal / stop hunt → ติดกับ | **Tick-Level Confirmation** — ดู tick 60s ก่อนยิง |
 
 ---
 
-## 🧠 AI Engine — XGBoost 38 Features (M5 + Multi-Timeframe + Patterns)
+## 🧠 AI Engine — XGBoost + 38 Features
 
-ระบบเรียนรู้จากแท่งเทียน **M5** ย้อนหลัง **300,000 แท่ง** ครอบคลุม **9 มิติ**:
+โมเดลเรียนรู้จากแท่ง **M5** ย้อนหลัง **300,000 แท่ง** ครอบคลุม **9 มิติ**:
 
-```
-📊 Candle Anatomy            body_atr, wick ratios, candle direction
-⚡ Fast ATR Normalisation     upper/lower wicks, body / fast ATR
-🚀 Momentum                  velocity_2/5, ret_1, RSI_7, EMA distance
-📈 Volume Surge              vol_accel_3, vol_spike_10
-💥 Micro Breakout            breakout up/down 5 bars, near high/low
-🌊 Volatility Regime         ATR ratio (calm vs volatile market)
-⏰ Time Encoding             time_sin, time_cos, session_score
-🆕 Multi-Timeframe Context   M15+H1 (trend_dir, ema_dist, rsi_norm)
-🆕 Symmetric Patterns        engulfing, pinbar, inside/outside, sweep, streak
-```
-
-**Output:** `[P(SELL), P(HOLD), P(BUY)]` → เทรดเฉพาะตอนที่ AI มั่นใจ ≥ threshold
-
-### 🎯 Anti-Bias System
-
-| ชั้น | ทำหน้าที่ |
+| มิติ | ตัวอย่าง Features |
 |---|---|
-| **Class weight overrides** (`ai.class_weight_overrides`) | ปรับ training weight ต่อ class แก้ bias ตอนเทรน |
-| **Per-direction threshold** (`hyper_frequency.directional_threshold`) | BUY ต้อง conf ≥ X, SELL ≥ Y (ตั้งคนละค่า) |
-| **Tick confirmation** (`hyper_frequency.tick_confirmation`) | ดู tick 60s ก่อนยิง (กัน fake signal/stop hunt) |
-| **Symmetric features** | Pattern features ทำงานทั้ง BUY/SELL เท่ากัน → ไม่มี directional bias ในตัว model |
+| 📊 **Candle Anatomy** | body_atr, upper/lower wick ratios, direction |
+| ⚡ **Fast ATR** | wicks / fast_ATR (วัด volatility ระยะสั้น) |
+| 🚀 **Momentum** | velocity_2/5, RSI_7, EMA-distance |
+| 📈 **Volume Surge** | vol_accel_3, vol_spike_10 |
+| 💥 **Micro Breakout** | breakout up/down 5 bars, near high/low |
+| 🌊 **Volatility Regime** | ATR ratio (calm vs storm) |
+| ⏰ **Time Encoding** | sin/cos hour, session score |
+| 🔭 **Multi-Timeframe** | M15 + H1 trend, ema_dist, rsi_norm |
+| 🎭 **Patterns** | engulfing, pinbar, inside/outside, sweep, streak |
+
+**Output:** `[P(SELL), P(HOLD), P(BUY)]` → เทรดเฉพาะ confidence ≥ threshold
 
 ---
 
-## 🔬 Tick-Level Confirmation Engine (`core/tick_analyzer.py`)
+## 🛡️ Recovery Engine — หัวใจของระบบ
 
-ก่อนยิงออเดอร์ — ดึง tick 60 วินาทีย้อนหลัง วิเคราะห์ 5 อย่าง:
-
-```
-🔍 Buy/Sell tick imbalance     (up-tick vs down-tick)
-📏 Spread z-score              (broker manipulation/news leak)
-🎣 Stop hunt detection         (ราคาแหลม-กลับ = ไล่ stop)
-💥 Velocity burst              (whale/news entry)
-📐 Micro trend slope           (tick-level direction)
-```
-
-ถ้าเงื่อนไขใดไม่ผ่าน → **skip การเปิดออเดอร์** (กัน fake signal)
-
----
-
-## 🛡️ Sequential Loss Recovery Engine (เทคโนโลยีหลัก)
-
-ไม่ใช่ Martingale ธรรมดา — เป็น **Smart Recovery** ที่คำนวณ lot ใหม่จาก **3 Floors** แล้วเลือกตัวที่ใหญ่ที่สุด:
+> ❗ **ไม่ใช่ Martingale แบบมั่วๆ** — เป็น **Smart Recovery** ที่คำนวณ lot จาก 3 สูตร แล้วเลือกตัวที่ใหญ่ที่สุด
 
 ### 🧮 สูตรคำนวณ Lot ไม้ Recovery
 
 ```python
 floor_geo     = base_lot × 1.7^step                       # โตแบบเรขาคณิต
-floor_recover = (cum_loss + min_profit) ÷ profit_per_lot  # พอกู้ทุน
-floor_volume  = sum(losing_lots) × 1.3                    # > รวม lot ที่เสียไป
+floor_recover = (cum_loss + min_profit) ÷ profit_per_lot  # พอกู้ทุน + กำไร
+floor_volume  = sum(losing_lots) × 1.5                    # > รวม lot ที่เสียไป
 
 next_lot = max(floor_geo, floor_recover, floor_volume)
 next_lot = min(next_lot, max_lot_cap)                     # capped
 ```
 
-### 📊 ตัวอย่างจริง (ATR=1.6, RR 2:1)
+### ⏱️ Lifecycle ของ Series
 
-| Step | เสีย $ | lot ใหม่ | ถ้า WIN | กำไรสุทธิหลัง recover |
-|---:|---:|---:|---:|---:|
-| 1 (Primary) | — | 0.01 | +$3.13 | +$3.13 |
-| 2 (Recovery) | $1.67 | **0.02** | +$6.26 | **+$4.59** |
-| 3 (Recovery) | $5.01 | **0.03** | +$9.39 | +$4.38 |
-| 4 (Recovery) | $10.02 | **0.05** | +$15.65 | +$5.63 |
-| 5 (HALT) | $18.37 | — | หยุดเทรด 10 นาที | — |
+```
+🟢 PRIMARY (ไม้ที่ 1, lot=base)
+        │
+   ┌────┴────┐
+  WIN       LOSS
+   │         │
+   ✅ Reset  ♻️ RECOVERY (ไม้ที่ 2, lot โตขึ้น)
+              │
+         ┌────┴────┐
+        WIN       LOSS
+         │         │
+   ✅ กู้ทุน    🛑 ครบ max_steps (=2) → ปิด series → เริ่มใหม่
+```
 
-**ทุก step ที่ชนะ → กำไรสุทธิ ≥ $4** เสมอ
+### 📊 ตัวอย่างจริง (config ปัจจุบัน: max_steps=2)
+
+| Step | Role | เสียสะสม | lot ที่ใช้ | ถ้า WIN | กำไรสุทธิ |
+|:---:|:---:|---:|---:|---:|---:|
+| 1 | 🟢 PRIMARY | — | 0.01 | +$2.50 | +$2.50 |
+| 2 | ♻️ RECOVERY | $1.92 | 0.02 | +$5.00 | +$3.08 |
+| 3 | 🛑 HALT | $5.84 | — | (ปิด series — เริ่มใหม่) | — |
+
+> 💡 **ทุกครั้งที่ WIN ระหว่าง series → ได้กำไรสุทธิอย่างน้อย `min_profit_target_usd` ($3)**
 
 ---
 
 ## 🚦 ระบบป้องกันความเสี่ยง 11 ชั้น
 
-| ชั้น | กลไก | ป้องกันอะไร |
-|---|---|---|
-| 1️⃣ | **Confidence ≥ threshold** | กรองสัญญาณอ่อน (random baseline = 33%) |
-| 2️⃣ | **Per-Direction Threshold** 🆕 | BUY/SELL ตั้ง threshold คนละค่า แก้ bias |
-| 3️⃣ | **Trend Filter** (`ema_dist_atr`) | ห้ามเทรดทวนเทรนด์ |
-| 4️⃣ | **Multi-bar Confirmation** | ต้องเห็น signal ติดต่อกัน N แท่ง |
-| 5️⃣ | **FOMO Exhaustion Guard** | ไม่เข้าตอนสุดเทรนด์ |
-| 6️⃣ | **Tick-Level Confirmation** 🆕 | กัน fake signal/stop hunt ระดับ tick |
-| 7️⃣ | **Inter-trade Cooldown** | ป้องกัน over-trading จาก noise |
-| 8️⃣ | **Dynamic Spread Guard** | ไม่เทรดตอน spread กว้างผิดปกติ |
-| 9️⃣ | **News Filter** (Forex Factory) | หยุดก่อน-หลังข่าวสำคัญ ±10 นาที |
-| 🔟 | **Max Steps + Halt Cooldown** | เสีย N ไม้ติด → หยุด/reset |
-| 1️⃣1️⃣ | **Global Equity Stop** | ขาดทุนรวม ≥ X% balance → ปิดทุกไม้ + HALT |
+ก่อนยิงแต่ละออเดอร์ ต้องผ่านด่านทั้งหมดนี้ — ไม่ผ่านด่านเดียว = ไม่เทรด
+
+| # | กลไก | ป้องกัน |
+|:-:|---|---|
+| 1️⃣ | **Confidence ≥ threshold** | กรองสัญญาณอ่อน |
+| 2️⃣ | **Per-Direction Threshold** | แก้ AI bias (BUY 0.62 / SELL 0.55) |
+| 3️⃣ | **Trend Filter** (ema_dist_atr) | ห้ามเทรดทวนเทรนด์ (ปิดได้) |
+| 4️⃣ | **Multi-bar Confirmation** | signal ต้องติดกัน N แท่ง |
+| 5️⃣ | **FOMO Exhaustion Guard** | ไม่เข้าตอนสุดเทรนด์ (ปิดได้) |
+| 6️⃣ | **Tick Confirmation** | ดู tick 60s — กัน fake/stop hunt |
+| 7️⃣ | **Inter-trade Cooldown** | ป้องกัน over-trading |
+| 8️⃣ | **Dynamic Spread Guard** | ไม่เทรดตอน spread ผิดปกติ |
+| 9️⃣ | **News Filter** (Forex Factory) | หยุด ±10 นาทีรอบข่าว High |
+| 🔟 | **Max Steps + Halt** | เสียติดเกิน → หยุดพัก/reset |
+| 1️⃣1️⃣ | **Global Equity Stop** | ขาดทุนรวม ≥ 15% balance → ปิดทุกไม้ |
 
 ---
 
-## 🧬 Memory & State Persistence
+## 💼 Dynamic Account Scaling — รองรับ $500 → $10M+
 
-| กลไก | ทำหน้าที่ |
-|---|---|
-| `data/recovery_state.json` | บันทึก consecutive_losses + cumulative_loss real-time |
-| **DB Auto-Reconstruct** 🆕 | ถ้า state file หาย → reconstruct จาก SQLite (`series` + `decisions`) |
-| **Processed tickets cache** | กัน double-count loss/win ของ ticket เดียวกัน |
-
----
-
-## ⚡ Smart Trailing Stop
-
-- ✅ **Trail เฉพาะตอนไม่มีหนี้** (recovery → ปิด trail ปล่อยถึง TP เต็ม)
-- ✅ **Trigger ที่ 1.0×ATR** (ไม่ trail เร็วเกิน)
-- ✅ **Lock กำไร + commission offset** (ไม่ถูก wick กิน)
-
----
-
-## 📺 Log แบบเล่าเรื่อง (ภาษาไทย + Emoji)
+ระบบคำนวณ lot **อัตโนมัติตามขนาดบัญชี** — ไม่ต้องแก้ config มือเมื่อทุนโต
 
 ```
-🚀 บอทเริ่มทำงาน | XAUUSD tf=M1 magic=990077
-💼 เริ่มสด: ไม่มีขาดทุนค้าง
-
-💓 14:32:00 | bid=2050.30 ask=2050.45 spread=15p | ✅ ไม่มีหนี้ | 👀 รอสัญญาณ (อีก 28s จะมีแท่งใหม่)
-
-🎯 14:33 | AI=BUY 58.2% ≥ 50.0% → จะเทรด | ✅ ไม่ค้าง | atr=1.625 spread=14p
-🆕 เปิดไม้ #12345 (series 25, ไม้ที่ 1) | BUY 0.01 lot @2050.30
-   SL=2048.68 (เสี่ยง $1.62) TP=2053.55 (เป้า $3.25) | AI 58.2%
-
-💔 ไม้ #12345 ปิดแล้ว → LOSS -$1.62
-   ↳ เสียติด 1 ไม้ ขาดทุนสะสม $1.62 → ไม้ถัดไป lot จะโต
-
-🧮 คำนวณ lot: เสียติด 1 ไม้ ค้าง $1.62 → ใช้ 0.02 lot
-   [เลือก แบบเรขาคณิต ×1.7^1 | options: geo=0.017, ต้อง=0.008, รวม×=0.013]
-♻️ เปิดไม้ #12346 (series 25, ไม้ที่ 2) | BUY 0.02 lot @2049.10
-
-💚 ไม้ #12346 ปิดแล้ว → WIN +$6.34
-🎉 RECOVER สำเร็จ! series #25 จบ กำไรสุทธิ +$4.72 → กลับ lot ปกติ
+base_lot     = (balance × risk_per_trade_pct%) ÷ (SL_distance × USD/lot)
+max_lot_cap  = (balance × max_lot_pct%)        ÷ (SL_distance × USD/lot)
 ```
+
+### 📊 ตาราง Scaling อัตโนมัติ (risk=0.10%, cap=2%)
+
+| Balance | base_lot | max_lot_cap | Loss สูงสุด/series |
+|---:|---:|---:|---:|
+| **$500** | 0.01 | 0.05 | ~$10 (2%) |
+| **$1,000** | 0.01 | 0.10 | ~$20 (2%) |
+| **$5,000** | 0.03 | 0.52 | ~$100 (2%) |
+| **$10,000** | 0.06 | 1.04 | ~$200 (2%) |
+| **$100,000** | 0.62 | 10.4 | ~$2,000 (2%) |
+| **$1,000,000** | 6.25 | 100 ⁂ | ~$20,000 (2%) |
+
+⁂ capped by `max_lot_cap_absolute=100`
+
+### 🎯 Risk Profile (ปรับได้ใน `config.json`)
+
+| Profile | risk_per_trade_pct | max_lot_pct | เหมาะกับ |
+|---|---:|---:|---|
+| 🛡️ **Ultra-Safe** *(default ตอนนี้)* | 0.10 | 2.0 | Long-term, capital preservation |
+| 🟢 **Conservative** | 0.30 | 5.0 | $1k-$1M, mainstream |
+| 🟡 **Balanced** | 0.50 | 7.5 | รับ DD ปานกลาง |
+| 🔴 **Aggressive** | 1.00 | 12.0 | Small account growth |
 
 ---
 
@@ -164,116 +161,114 @@ next_lot = min(next_lot, max_lot_cap)                     # capped
 
 ```
 SweepHunter/
-├── run.py                        🎯 Entry: train | bot | status
-├── review_trades.py              🔬 🆕 Past trade analyzer (bias/streak/regime)
-├── config.json                   ⚙️  All-in-one config
-├── FEATURE_ENGINEERING_V2.md     🧬 🆕 Blueprint for next-gen features
-├── LEARNING.md                   📚 Tutorial (Thai)
+├── 🚀 run.py                       Entry: train | bot | status
+├── ⚙️  config.json                  คอนฟิกทั้งหมด (ที่เดียว)
+├── 📚 README.md / LEARNING.md       เอกสาร
+├── 📊 generate_report.py            สร้างรายงาน HTML
+├── 🔄 retrain.bat / watchdog.bat    Automation scripts
+│
 ├── core/
-│   ├── xauusd_hyper_core.py      🧠 Main loop + Recovery + Anti-bias filters
-│   ├── m1_hyper_pipeline.py      📊 38 Features (Micro+MTF+Patterns)
-│   ├── model_trainer.py          🎓 XGBoost + class_weight overrides
-│   ├── tick_analyzer.py          🔬 🆕 Tick-level confirmation engine
-│   ├── execution.py              ⚡ IOC + Spread + Retry (5×0.2s)
-│   ├── mt5_connector.py          🔌 MT5 auto-detect + tick history
-│   ├── news_filter.py            📰 Forex Factory XML
-│   ├── async_db_manager.py       💾 Async SQLite + DB recovery reconstruct
-│   ├── config.py / logger.py / paths.py
-│   └── __init__.py
-└── data/                         📁 auto: models/ db/ logs/ cache/
+│   ├── 🧠 xauusd_hyper_core.py     Main loop + Recovery + Filters
+│   ├── 📈 m1_hyper_pipeline.py     38 Features (Micro+MTF+Patterns)
+│   ├── 🎓 model_trainer.py         XGBoost training + class weights
+│   ├── 🔬 tick_analyzer.py         Tick-level confirmation
+│   ├── ⚡ execution.py              IOC orders + Spread + Retry
+│   ├── 🔌 mt5_connector.py         MT5 wrapper + auto-reconnect
+│   ├── 📰 news_filter.py           Forex Factory XML parser
+│   ├── 💾 async_db_manager.py      Async SQLite + state recovery
+│   ├── 🛠️  adaptive.py              Adaptive threshold tuning
+│   └── config.py / logger.py / paths.py
+│
+└── data/                           (auto-created)
+    ├── models/    🎯 trained .pkl
+    ├── db/        💾 hyper_trades.sqlite
+    ├── logs/      📝 daily logs
+    └── cache/     ⚡ news/spread cache
 ```
 
-**100% Portable** — path resolve อัตโนมัติจาก `Path(__file__).resolve().parent.parent`
+✅ **100% Portable** — paths resolve อัตโนมัติจาก `Path(__file__).resolve().parent.parent`
 
 ---
 
-## 📦 Installation
+## 📦 การติดตั้ง
 
 ### Requirements
-- Windows 10/11
-- Python 3.10+
-- MetaTrader 5 (แนะนำ Vantage / Exness / IC Markets — broker ที่ allow EA)
-- บัญชี Hedge Account
+- 🪟 Windows 10/11
+- 🐍 Python 3.10+
+- 📊 MetaTrader 5 (Vantage / Exness / IC Markets แนะนำ)
+- 💼 บัญชี Hedge Account
 
-### Setup (3 ขั้นตอน)
+### 3 ขั้นตอน Setup
 
 ```powershell
-# 1. ติดตั้ง dependencies
+# 1️⃣ ติดตั้ง dependencies
 pip install -r requirements.txt
 
-# 2. แก้ config.json — ใส่ MT5 login
+# 2️⃣ แก้ config.json — ใส่ MT5 login
 {
-  "mt5": { "login": YOUR_LOGIN, "password": "YOUR_PASS", "server": "YOUR_SERVER" }
+  "mt5": {
+    "login": YOUR_LOGIN,
+    "password": "YOUR_PASS",
+    "server": "YOUR_SERVER"
+  }
 }
 
-# 3. Train model + รันบอท
-python run.py train      # ~5-15 นาที (XGBoost on 200k bars)
-python run.py bot        # เริ่มเทรด!
+# 3️⃣ Train model + รันบอท
+python run.py train      # ~5-15 นาที (XGBoost on 300k bars)
+python run.py bot        # 🚀 เริ่มเทรด!
 ```
 
 ---
 
-## ⚙️ Configuration ที่ปรับได้
+## ⚙️ Config สำคัญ (ค่าปัจจุบัน)
 
-### Recovery Engine
+### 🎯 Trading Core
+```json
+"trading": {
+  "symbol": "XAUUSD",
+  "timeframe": "M5",
+  "magic_number": 990077,
+  "base_lot": 0.01,
+  "sl_atr_mult": 1.2,
+  "tp_atr_mult": 1.6
+}
+```
+
+### 🛡️ Recovery Engine
 ```json
 "recovery": {
   "enabled": true,
-  "max_steps": 4,
+  "max_steps": 2,
   "lot_multiplier": 1.7,
-  "min_profit_target_usd": 1.0,
-  "profit_volume_multiplier": 1.3,
-  "max_lot_cap": 0.5,
-  "halt_after_max_steps_minutes": 10,
-  "global_equity_stop_pct": 7.0
+  "min_profit_target_usd": 3.0,
+  "profit_volume_multiplier": 1.5,
+  "max_lot_cap": 0.08,
+  "halt_after_max_steps_minutes": 0,
+  "global_equity_stop_pct": 15.0
 }
 ```
 
-### AI Decision Filters (Anti-Bias Stack)
+> 💡 **อยากให้นับ 3 ไม้แพ้ติดอยู่ series เดียว?** เปลี่ยน `max_steps: 3` แต่ระวัง lot จะโตเร็ว (0.01 × 1.7³ ≈ 0.05)
+
+### 🧠 AI & Filters
 ```json
 "hyper_frequency": {
-  "min_confidence": 0.50,
-  "trend_filter_enabled": true,
-  "trend_min_ema_dist_atr": 0.10,
-  "require_consecutive_bars": 1,
-  "min_seconds_between_entries": 0,
-  "cooldown_seconds_after_series_close": 30,
-  "exhaustion_filter": {
+  "min_confidence": 0.55,
+  "directional_threshold": {
     "enabled": true,
-    "max_velocity_5_atr": 1.2,
-    "max_near_extreme": 0.85
+    "buy": 0.62,
+    "sell": 0.55
   },
   "tick_confirmation": {
     "enabled": true,
     "seconds_back": 60,
-    "min_ticks": 20,
-    "max_spread_zscore": 3.0,
     "min_directional_ratio": 0.55,
-    "max_stop_hunt_score": 0.70,
-    "max_velocity_burst": 0.85,
-    "require_micro_trend_aligned": true
-  },
-  "directional_threshold": {
-    "enabled": true,
-    "buy": 0.55,
-    "sell": 0.42
+    "max_stop_hunt_score": 0.70
   }
 }
 ```
 
-### Class Weight Override (แก้ training bias)
-```json
-"ai": {
-  "class_weight_overrides": {
-    "0": 1.0,   // SELL
-    "1": 1.0,   // HOLD
-    "2": 1.0    // BUY
-  }
-}
-```
-> 💡 **Tip:** ใช้ `python review_trades.py` เพื่อตรวจ BUY vs SELL accuracy ก่อนปรับค่า
-
-### Smart Trailing
+### ⚡ Smart Trailing
 ```json
 "smart_trailing": {
   "enabled": true,
@@ -286,177 +281,89 @@ python run.py bot        # เริ่มเทรด!
 
 ---
 
-## 📈 Performance Expectations
+## 📺 Log แบบเล่าเรื่อง (ภาษาไทย + Emoji)
 
-> ⚠️ **Disclaimer:** ผลลัพธ์ขึ้นอยู่กับสภาพตลาด, broker, และการตั้งค่า — ทดสอบบน Demo ก่อนเสมอ
+```
+🚀 บอทเริ่มทำงาน | XAUUSD tf=M5 magic=990077
+💼 เริ่มสด: ไม่มีขาดทุนค้าง
 
-| Metric | ค่าคาดหวัง |
+💓 14:32:00 | bid=2050.30 ask=2050.45 spread=15p | ✅ ไม่มีหนี้ | 👀 รอสัญญาณ (อีก 28s)
+
+🎯 14:33 | AI=BUY 64.2% ≥ 62.0% → จะเทรด | atr=1.625 spread=14p
+✅ Tick confirm: buy_ratio=0.61 stop_hunt=0.32 micro_trend=+0.5
+🆕 เปิดไม้ #12345 (series 25, ไม้ที่ 1) | BUY 0.01 lot @2050.30
+   SL=2048.36 (เสี่ยง $1.94) TP=2052.90 (เป้า $2.60) | AI 64.2%
+
+💔 ไม้ #12345 ปิดแล้ว → LOSS -$1.94
+   ↳ เสียติด 1 ไม้ ขาดทุนสะสม $1.94
+
+🧮 คำนวณ lot: เสียติด 1 ไม้ ค้าง $1.94 → ใช้ 0.02 lot
+   [เลือก แบบเรขาคณิต ×1.7^1 | options: geo=0.017, ต้อง=0.019, รวม×=0.015]
+♻️ เปิดไม้ #12346 (series 25, ไม้ที่ 2) | BUY 0.02 lot @2049.10
+
+💚 ไม้ #12346 ปิดแล้ว → WIN +$5.20
+🎉 RECOVER สำเร็จ! series #25 จบ กำไรสุทธิ +$3.26 → กลับ lot ปกติ
+```
+
+---
+
+## 🧬 State Persistence — กัน restart ทำลายระบบ
+
+| ไฟล์/กลไก | หน้าที่ |
 |---|---|
-| Trades / วัน | **5-10** ไม้ (เน้นคุณภาพ ไม่ปริมาณ) |
-| Win Rate | **55-65%** (ขึ้นกับ market regime) |
-| Avg Win / Loss Ratio | **1.8 - 2.2** (TP=2×ATR, SL=1×ATR) |
-| Max Concurrent Position | 1 (single position by design) |
-| Max Drawdown ต่อ session | ≤ 7% (Equity Stop) |
+| `data/recovery_state.json` | snapshot real-time ของ recovery state |
+| **DB Auto-Reconstruct** | ถ้าไฟล์ json หาย → สร้างใหม่จาก SQLite |
+| **Processed tickets cache** | กัน double-count win/loss ของ ticket เดียวกัน |
+| **Model timestamp baseline** | retrain counter ไม่ reset ตอน restart |
 
 ---
 
-## 💼 Dynamic Account Scaling — รองรับ $500 ถึง $10M+
+## 📈 Performance ที่คาดหวัง
 
-ระบบ **คำนวณ lot อัตโนมัติ** ตามขนาดบัญชีแบบ real-time ไม่ต้องแก้ config มือเมื่อทุนเปลี่ยน:
+> ⚠️ **Disclaimer:** ผลลัพธ์ขึ้นอยู่กับ market regime, broker spread, และการตั้งค่า — **ทดสอบบน Demo ก่อนเสมอ**
 
-```
-base_lot     = (balance × risk_per_trade_pct%) ÷ (SL_distance × USD/lot)
-max_lot_cap  = (balance × max_lot_pct%)        ÷ (SL_distance × USD/lot)
-```
-
-### 📊 ตาราง Scaling อัตโนมัติ (ATR=1.6, SL=1×ATR ≈ $160 loss/lot, risk=0.3%, cap=5%)
-
-| Balance | Risk/trade | base_lot | max_lot_cap | Loss สูงสุด/series | Profit เป้าหมาย/series |
-|---:|---:|---:|---:|---:|---:|
-| **$500** | $1.50 | 0.01 | 0.16 | ~$25 (5%) | ~$5-15 |
-| **$1,000** | $3.00 | 0.02 | 0.31 | ~$50 (5%) | ~$10-30 |
-| **$5,000** | $15 | 0.09 | 1.56 | ~$250 (5%) | ~$50-150 |
-| **$10,000** | $30 | 0.19 | 3.13 | ~$500 (5%) | ~$100-300 |
-| **$50,000** | $150 | 0.94 | 15.6 | ~$2,500 (5%) | ~$500-1,500 |
-| **$100,000** | $300 | 1.88 | 31.3 | ~$5,000 (5%) | ~$1,000-3,000 |
-| **$500,000** | $1,500 | 9.38 | 100 ⁂ | ~$25,000 (5%) | ~$5,000-15,000 |
-| **$1,000,000** | $3,000 | 18.75 | 100 ⁂ | ~$50,000 (5%) | ~$10,000-30,000 |
-| **$10,000,000** | $30,000 | 50 † | 100 ⁂ | ~$500,000 (5%) | ~$100,000-300,000 |
-
-⁂ capped by `max_lot_cap_absolute=100.0` (เกิน 100 lot = liquidity issue)
-† capped by `max_base_lot=50.0`
-
-### ⚙️ Config `account_scaling`
-
-```json
-"account_scaling": {
-  "enabled": true,
-  "risk_per_trade_pct": 0.30,
-  "max_lot_pct_of_balance": 5.0,
-  "min_base_lot": 0.01,
-  "max_base_lot": 50.0,
-  "min_lot_cap": 0.05,
-  "max_lot_cap_absolute": 100.0,
-  "balance_refresh_seconds": 300
-}
-```
-
-### 🎯 ปรับ Risk Profile
-
-| Profile | risk_per_trade_pct | max_lot_pct | เหมาะกับ |
-|---|---:|---:|---|
-| **Ultra-Conservative** | 0.15 | 2.0 | $10M+, hedge fund style |
-| **Conservative** *(default)* | 0.30 | 5.0 | $1k-$1M, mainstream |
-| **Balanced** | 0.50 | 7.5 | คนรับ DD ได้ปานกลาง |
-| **Aggressive** | 1.00 | 12.0 | small account ($500-$5k) |
-
-> 💡 **สูตรง่ายๆ:** ระบบ scale lot ให้ **ความเสี่ยง $ = % ของพอร์ต** ไม่ว่าพอร์ตเล็กหรือใหญ่ → ผลตอบแทน % เท่ากันโดยประมาณ
-
-### ⚠️ ข้อควรระวังพอร์ตใหญ่ ($1M+)
-
-- ✅ ใช้ broker **ECN/Raw spread** (เช่น IC Markets, Pepperstone Razor, Vantage Pro)
-- ✅ เปิด **VPS ใกล้ broker server** (ลด latency เหลือ < 5ms)
-- ✅ ลด `max_lot_pct_of_balance` ลงเหลือ 2-3% (slippage ที่ size ใหญ่จะเพิ่ม)
-- ✅ พิจารณา **split orders** หาก lot > 50 (บาง broker จำกัด max single lot)
-- ⚠️ ทดสอบ Demo ขนาดเท่าจริงอย่างน้อย 1 เดือน
+| Metric | ค่าที่คาดหวัง |
+|---|---|
+| 📊 Trades / วัน | **5-15 ไม้** (เน้นคุณภาพ) |
+| 🎯 Win Rate | **55-65%** |
+| ⚖️ Avg RR | **~1.3 : 1** (TP=1.6×ATR / SL=1.2×ATR) |
+| 🔢 Concurrent Position | **1** (single position by design) |
+| 📉 Max DD ต่อ session | **≤ 15%** (Equity Stop) |
+| 🔄 Auto-Retrain | ทุก **500 trades ใหม่** หรือ 240 นาที |
 
 ---
 
-## 🎓 Self-Retraining
-
-ระบบ **retrain ตัวเองอัตโนมัติ** ทุกครั้งที่:
-- มี closed trades ใหม่ ≥ 500 ไม้
-- ผ่านไป ≥ 4 ชั่วโมงจาก train ครั้งก่อน
-- ไม่มี position เปิด + ไม่มี recovery ค้าง
-
-→ AI ปรับตัวตามสภาพตลาดที่เปลี่ยน โดยไม่ต้อง manual
-
----
-
-## 💾 ข้อมูลที่บันทึก (SQLite + Webhook)
-
-ทุก trade บันทึกลง `data/db/hyper_trades.sqlite`:
-- `decisions` — ทุกการตัดสินใจ (proba, conf, spread, atr, lot, sl, tp, pnl, status)
-- `series` — ทุก recovery series (start, close reason, total pnl)
-
-**Optional Webhook** → ส่งสรุปไป Discord/Telegram/Slack ทุก 12 ชั่วโมง
-
----
-
-## 🛠️ คำสั่งที่ใช้บ่อย
+## 🛠️ Commands ใช้บ่อย
 
 ```powershell
-python run.py status     # ตรวจ MT5 + symbol spec
-python run.py train      # train model ใหม่
-python run.py bot        # รันบอท (โหมด live)
-python review_trades.py  # 🆕 วิเคราะห์ trade history (WR, bias, hour, ATR, streak)
-
-# ลบ recovery state ค้าง (ถูก reconstruct จาก DB อัตโนมัติ)
-Remove-Item data\recovery_state.json
-
-# ดู log แบบ live
-Get-Content data\logs\hyper.log -Wait -Tail 30
+python run.py train            # train โมเดลใหม่
+python run.py bot              # รันบอท production
+python run.py status           # ดูสถานะปัจจุบัน
+python generate_report.py      # สร้าง HTML report
+python _inspect_db.py          # debug: ดู series/decisions
+.\watchdog.bat                 # auto-restart ถ้า crash
+.\retrain.bat                  # retrain แบบ manual
 ```
 
 ---
 
-## 🔬 Past Trade Review Tool (`review_trades.py`) 🆕
+## 🚨 ข้อควรระวัง
 
-วิเคราะห์ trade history เชิงลึก:
-
-```
-🎯 Win/Loss stats + Net P/L + Real RR
-🚨 High-Confidence LOSSES (สัญญาณที่ AI มั่นใจมากแต่ผิด)
-📈 Win Rate per Direction (BUY vs SELL → จับ bias)
-🕐 Win Rate per Hour UTC (หา session ที่ห่วยที่สุด)
-⚡ Win Rate per ATR regime (LOW/MID/HIGH volatility)
-📏 Win Rate per Spread tier (กว้าง vs แคบ)
-💔 Loss Streak distribution
-♻️ Recovery Series outcomes (CLOSED_TP/SL/MAX_STEPS/EQUITY_STOP)
-💡 Auto recommendations
-```
+- ❌ **อย่าใช้กับเงินที่เสียไม่ได้** — ทดสอบ Demo ขั้นต่ำ 2 สัปดาห์
+- ❌ **อย่าเทรดมือบนบัญชีเดียวกันตอนบอททำงาน** — magic_number กันได้แค่ระดับโค้ด
+- ⚠️ **News High Impact** — บอทหยุดให้ ±10 นาที แต่ slippage ยังเกิดได้
+- ⚠️ **Broker spread แตกต่าง** — ปรับ `dynamic_spread.hard_max_points` ตาม broker
+- ⚠️ **VPS แนะนำ** — latency ต่ำ + uptime 24/5
 
 ---
 
-## ⚠️ Risk Warning
+## 📜 License
 
-> 🛑 การเทรด Forex/CFD มีความเสี่ยงสูง อาจสูญเงินทั้งหมด
->
-> - ⚠️ **เริ่มจาก Demo** อย่างน้อย 2-4 สัปดาห์
-> - ⚠️ **ทุนเริ่มต้นแนะนำ** ≥ $500 (สำหรับ base_lot=0.01, max_lot_cap=0.5)
-> - ⚠️ **ใช้บัญชี Hedge** ที่ broker อนุญาต EA
-> - ⚠️ ผลตอบแทนในอดีต **ไม่รับประกัน** ผลตอบแทนในอนาคต
+Commercial — Private use only. ห้ามเผยแพร่ source code โดยไม่ได้รับอนุญาต
 
 ---
 
-## 🤝 Support & License
-
-- 📧 **Support:** ติดต่อผู้พัฒนาเพื่อความช่วยเหลือทางเทคนิค
-- 📜 **License:** Commercial — ใช้ส่วนตัวเท่านั้น ห้ามแจกจ่ายต่อ
-- 🔄 **Updates:** อัพเดท model + features ฟรี ตามรอบที่กำหนด
-
----
-
-## 🌟 ทำไมต้องเลือก SweepHunter?
-
-> ✅ **AI ที่ Train จากข้อมูลจริง 200k bars** — ไม่ใช่ rule-based ธรรมดา
->
-> ✅ **Recovery Engine 3-Floor** — โตอย่างมีหลักการ ไม่บ้าคลั่งแบบ Martingale
->
-> ✅ **7 Layer Risk Control** — ป้องกันบัญชีระเบิด
->
-> ✅ **Self-Retraining** — ปรับตัวตามตลาด ไม่ต้องดูแลรายวัน
->
-> ✅ **Log ภาษาไทย** — เข้าใจทุกการตัดสินใจของบอท
->
-> ✅ **100% Portable** — ลาก folder ไปไหนก็รันได้ทันที
-
----
-
-<div align="center">
-
-**🏆 SweepHunter AI — เทรด XAUUSD แบบมือโปร โดยไม่ต้องนั่งเฝ้า 🏆**
-
-*Built with Python • XGBoost • MetaTrader 5 • SQLite*
-
-</div>
+<p align="center">
+  <b>Made with 🧠 + ☕ for serious traders</b><br>
+  <sub>v2.x — Hyper-Frequency + Recovery + Anti-Bias Stack</sub>
+</p>
