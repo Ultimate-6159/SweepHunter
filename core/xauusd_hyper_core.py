@@ -863,8 +863,62 @@ class HyperBot:
         com_offset = commission_price_offset(spec)
         be_lock = be_buf + com_offset
 
-        # 🆕 Percentage-based trailing: ทิ้งระยะ X% ของระยะที่ราคาวิ่งไป (lock (100-X)% ของกำไร)
-        # mode="percentage" → trail_dist = profit_price × trail_pct  (default 30% → lock 70%)
+        # 🆕 Trail mode:
+        #   "be_only"    → ขยับ SL ไปที่ entry+buffer ครั้งเดียว แล้วปล่อยวิ่งไป TP (RECOMMENDED)
+        #   "percentage" → trail ตาม X% ของกำไรที่วิ่งไป (lock (100-X)%) — เก็บกำไรเร็วแต่ตัด upside
+        #   "atr"        → trail แบบ fixed distance × ATR (legacy)
+        #   "off"        → ไม่ทำ trailing เลย (ให้ TP เดิมทำงาน)
+        trail_mode = str(self.cfg_st.get("trail_mode", "be_only")).lower()
+        if trail_mode == "off":
+            return
+
+        trail_pct = max(0.05, min(0.95, float(self.cfg_st.get("trail_pct_of_excursion", 0.30))))
+        trail_dist_atr_val = float(self.cfg_st.get("trail_distance_atr", 0.3)) * atr_value
+        trail_step = float(self.cfg_st.get("trail_step_atr", 0.1)) * atr_value
+
+        for p in live:
+            entry = float(p.price_open)
+            is_buy = (p.type == 0)
+            cur = float(tick.bid if is_buy else tick.ask)
+            profit_price = (cur - entry) if is_buy else (entry - cur)
+            if profit_price < be_trigger:
+                continue
+
+            # คำนวณ sl_target ตาม mode
+            if trail_mode == "be_only":
+                # BE only: SL = entry + buffer (กันขาดทุน) — ไม่ trail ตามต่อ
+                sl_target = (entry + be_lock) if is_buy else (entry - be_lock)
+            elif trail_mode == "percentage":
+                trail_dist = max(profit_price * trail_pct, 0.10 * atr_value)
+                sl_target = (max(entry + be_lock, cur - trail_dist) if is_buy
+                             else min(entry - be_lock, cur + trail_dist))
+            else:  # "atr"
+                sl_target = (max(entry + be_lock, cur - trail_dist_atr_val) if is_buy
+                             else min(entry - be_lock, cur + trail_dist_atr_val))
+            sl_target = spec.normalize_price(sl_target)
+
+            cur_sl = float(p.sl) if p.sl else 0.0
+
+            # be_only: ขยับครั้งเดียวแล้วหยุด (ถ้า SL อยู่ที่ entry หรือดีกว่าแล้ว → skip)
+            if trail_mode == "be_only":
+                if is_buy and cur_sl >= entry - 1e-9:
+                    continue
+                if (not is_buy) and 0 < cur_sl <= entry + 1e-9:
+                    continue
+            else:
+                if is_buy and cur_sl > 0 and sl_target <= cur_sl + trail_step:
+                    continue
+                if (not is_buy) and cur_sl > 0 and sl_target >= cur_sl - trail_step:
+                    continue
+
+            if modify_position_sl(p.ticket, new_sl=sl_target, new_tp=p.tp):
+                tag = {
+                    "be_only": "BE locked",
+                    "percentage": "pct lock %.0f%%" % ((1.0 - trail_pct) * 100),
+                    "atr": "atr trail",
+                }.get(trail_mode, trail_mode)
+                log.info("📈 เลื่อน SL ไม้ #%d [%s] | กำไรวิ่ง %.3f → SL: %.3f → %.3f",
+                         p.ticket, tag, profit_price, cur_sl, sl_target)
         # mode="atr"        → trail_dist = trail_distance_atr × ATR  (legacy คงที่)
         trail_mode = str(self.cfg_st.get("trail_mode", "percentage")).lower()
         trail_pct = max(0.05, min(0.95, float(self.cfg_st.get("trail_pct_of_excursion", 0.30))))
