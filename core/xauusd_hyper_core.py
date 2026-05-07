@@ -58,6 +58,12 @@ class RecoveryState:
     last_side: Optional[str] = None
     processed_tickets: Set[int] = field(default_factory=set)
     halted_until_ts: float = 0.0
+    # 🆕 Direction-flip lock: ติดตามว่าเสียทิศไหนติดต่อกันกี่ไม้
+    last_loss_side: Optional[str] = None
+    consec_same_dir_losses: int = 0
+    # 🆕 Direction-block: ห้ามเทรดทิศนี้จนกว่าจะถึง ts (cooldown)
+    blocked_side: Optional[str] = None
+    block_side_until_ts: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -68,6 +74,10 @@ class RecoveryState:
             "last_side": self.last_side,
             "processed_tickets": sorted(self.processed_tickets),
             "halted_until_ts": self.halted_until_ts,
+            "last_loss_side": self.last_loss_side,
+            "consec_same_dir_losses": self.consec_same_dir_losses,
+            "blocked_side": self.blocked_side,
+            "block_side_until_ts": self.block_side_until_ts,
         }
 
     @classmethod
@@ -80,6 +90,10 @@ class RecoveryState:
         s.last_side = d.get("last_side")
         s.processed_tickets = set(int(t) for t in d.get("processed_tickets", []))
         s.halted_until_ts = float(d.get("halted_until_ts", 0.0))
+        s.last_loss_side = d.get("last_loss_side")
+        s.consec_same_dir_losses = int(d.get("consec_same_dir_losses", 0))
+        s.blocked_side = d.get("blocked_side")
+        s.block_side_until_ts = float(d.get("block_side_until_ts", 0.0))
         return s
 
 
@@ -95,6 +109,7 @@ class HyperBot:
         self.cfg_st = Config.section("smart_trailing")
         self.cfg_r = Config.section("recovery") or {}
         self.cfg_as = Config.section("account_scaling") or {}
+        self.cfg_rf = Config.section("risk_filters") or {}
 
         self.symbol = self.cfg_t["symbol"]
         self.timeframe = self.cfg_t.get("timeframe", "M1")
@@ -349,6 +364,24 @@ class HyperBot:
             log.debug("feature build skip: %s", e)
             return
 
+        # 🆕 🅑 ATR-Spike Filter — กันเทรดตอนตลาด volatile ผิดปกติ
+        # ถ้า ATR ปัจจุบันสูงกว่าค่าเฉลี่ย rolling × max_ratio → skip (loss/ไม้จะใหญ่เกิน)
+        atr_cfg = self.cfg_rf.get("atr_spike", {})
+        if atr_cfg.get("enabled", True):
+            try:
+                lookback = int(atr_cfg.get("rolling_bars", 50))
+                max_ratio = float(atr_cfg.get("max_atr_ratio", 2.0))
+                atr_series = df["atr"].tail(lookback + 1).iloc[:-1]
+                atr_mean = float(atr_series.mean()) if len(atr_series) > 5 else 0.0
+                if atr_mean > 0:
+                    ratio = atr_value / atr_mean
+                    if ratio > max_ratio:
+                        log.info("🚫 ATR spike: ATR=%.2f สูงกว่าค่าเฉลี่ย %d แท่ง (%.2f) %.1f× (เกิน %.1f×) → ข้าม",
+                                 atr_value, lookback, atr_mean, ratio, max_ratio)
+                        return
+            except Exception as e:
+                log.debug("atr-spike check skip: %s", e)
+
         # F. spread tracker
         spec = MT5Connector.get_symbol_spec(self.symbol)
         tick = MT5Connector.get_tick(self.symbol)
@@ -400,6 +433,31 @@ class HyperBot:
         log.info("🎯 %s | AI=%s %.1f%% ≥ %.1f%% → จะเทรด | %s | atr=%.3f spread=%.0fp",
                  bar_dt.strftime("%H:%M"), CLASS_NAMES[pred], conf*100, thr*100,
                  debt_str, atr_value, cur_spread)
+
+        # 🆕 🅐 Direction-Flip Lock — กันเคส "AI ส่งทิศเดียวซ้ำตอน trend แรง" (catching rocket)
+        # ถ้าเสีย N ไม้ติดทิศเดียว → block ทิศนั้น cooldown_minutes
+        df_cfg = self.cfg_rf.get("direction_flip", {})
+        if df_cfg.get("enabled", True):
+            # Cooldown active?
+            if (self.recovery.blocked_side == side
+                    and time.time() < self.recovery.block_side_until_ts):
+                wait = int(self.recovery.block_side_until_ts - time.time())
+                log.info("🚫 Direction lock: %s ยัง block อีก %ds (เสียติด %d ไม้ทาง %s) → ข้าม",
+                         side, wait, self.recovery.consec_same_dir_losses,
+                         self.recovery.last_loss_side)
+                return
+            # Trigger fresh block?
+            min_consec = int(df_cfg.get("min_consec_same_dir_losses", 2))
+            if (self.recovery.last_loss_side == side
+                    and self.recovery.consec_same_dir_losses >= min_consec
+                    and self.recovery.blocked_side != side):
+                cooldown_min = float(df_cfg.get("cooldown_minutes", 30))
+                self.recovery.blocked_side = side
+                self.recovery.block_side_until_ts = time.time() + cooldown_min * 60
+                self._save_recovery()
+                log.warning("🛑 Direction-flip lock activated: เสีย %s ติด %d ไม้ → block %s %d นาที",
+                            side, self.recovery.consec_same_dir_losses, side, int(cooldown_min))
+                return
 
         # Trend filter: ใช้ ema_dist_atr (price - EMA20 หาร ATR)
         # BUY ต้องมี price เหนือ EMA, SELL ต้องอยู่ใต้
@@ -764,6 +822,12 @@ class HyperBot:
 
             if pnl > 0:
                 self.recovery.cumulative_loss_usd -= pnl
+                # 🆕 reset direction-flip counter on WIN
+                self.recovery.consec_same_dir_losses = 0
+                self.recovery.last_loss_side = None
+                # ปลด block ทันที (WIN = market อาจเปลี่ยน regime)
+                self.recovery.blocked_side = None
+                self.recovery.block_side_until_ts = 0.0
                 if self.recovery.cumulative_loss_usd <= 0:
                     self._on_recovery_complete()
                 else:
@@ -773,10 +837,30 @@ class HyperBot:
                 self.recovery.cumulative_loss_usd += abs(pnl)
                 self.recovery.cumulative_losing_volume += float(row["volume"] or 0.0)
                 self.recovery.consecutive_losses += 1
+                # 🆕 update direction-flip counter
+                trade_side = "BUY" if row["prediction"] == 2 else "SELL"
+                if self.recovery.last_loss_side == trade_side:
+                    self.recovery.consec_same_dir_losses += 1
+                else:
+                    self.recovery.consec_same_dir_losses = 1
+                    self.recovery.last_loss_side = trade_side
                 log.info("   ↳ เสียติด %d ไม้แล้ว ขาดทุนสะสม $%.2f (lot รวม %.3f) → ไม้ถัดไป lot จะโต",
                          self.recovery.consecutive_losses,
                          self.recovery.cumulative_loss_usd,
                          self.recovery.cumulative_losing_volume)
+                # 🆕 🅒 Per-Series Loss Cap — ปิด series ก่อนที่ max_steps จะระเบิด
+                cap_cfg = self.cfg_rf.get("series_loss_cap", {})
+                if cap_cfg.get("enabled", True):
+                    cap_pct = float(cap_cfg.get("max_loss_pct_of_balance", 8.0))
+                    bal = self._get_balance()
+                    if bal > 0:
+                        loss_pct = self.recovery.cumulative_loss_usd / bal * 100.0
+                        if loss_pct >= cap_pct:
+                            log.error("🚨 Series Loss Cap! ขาดทุน $%.2f = %.1f%% ของ balance $%.0f (เกิน %.1f%%) → ปิด series + halt",
+                                      self.recovery.cumulative_loss_usd, loss_pct, bal, cap_pct)
+                            self._on_series_loss_cap()
+                            self._save_recovery()
+                            continue
                 max_steps = int(self.cfg_r.get("max_steps", 4))
                 if self.recovery.consecutive_losses >= max_steps:
                     self._on_max_steps_exceeded()
@@ -829,6 +913,44 @@ class HyperBot:
         self.recovery.consecutive_losses = 0
         self.recovery.series_id = None
         self.recovery.last_side = None
+
+    # 🆕 helper: ดึง balance (ใช้ cache ถ้ามี เพื่อไม่ query MT5 ทุกครั้ง)
+    def _get_balance(self) -> float:
+        try:
+            now = time.time()
+            if now - self._cached_balance_ts > 30 or self._cached_balance <= 0:
+                acc = mt5.account_info()
+                if acc and acc.balance > 0:
+                    self._cached_balance = float(acc.balance)
+                    self._cached_balance_ts = now
+            return float(self._cached_balance)
+        except Exception:
+            return 0.0
+
+    # 🆕 🅒 Series Loss Cap — ปิด series ก่อน max_steps ระเบิด
+    def _on_series_loss_cap(self) -> None:
+        sid = self.recovery.series_id
+        cap_cfg = self.cfg_rf.get("series_loss_cap", {})
+        halt_min = float(cap_cfg.get("halt_minutes", 30))
+        if sid is not None:
+            self.db.close_series(sid, status="CLOSED_LOSS_CAP",
+                                 final_pnl=-self.recovery.cumulative_loss_usd,
+                                 total_volume=0.0, avg_entry_price=0.0,
+                                 notes=f"loss cap hit after {self.recovery.consecutive_losses} losses")
+            self.webhook.series_closed({
+                "series_id": sid, "symbol": self.symbol,
+                "consecutive_losses": self.recovery.consecutive_losses,
+                "final_pnl": -self.recovery.cumulative_loss_usd,
+                "reason": "LOSS_CAP",
+            })
+        self.recovery.halted_until_ts = time.time() + halt_min * 60
+        self.recovery.cumulative_loss_usd = 0.0
+        self.recovery.cumulative_losing_volume = 0.0
+        self.recovery.consecutive_losses = 0
+        self.recovery.series_id = None
+        self.recovery.last_side = None
+        # อย่า reset direction tracking เพราะอาจ block ทิศนั้นต่อ
+        log.error("🛑 Series ปิดแล้ว → halt %d นาที", int(halt_min))
 
     # ============================================================ smart trailing
     def _manage_trailing(self) -> None:
