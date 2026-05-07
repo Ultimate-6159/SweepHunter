@@ -30,6 +30,107 @@ from .paths import model_path
 log = get_logger("trainer")
 
 
+def _load_real_trade_outcomes(symbol: str) -> "Optional[object]":
+    """
+    🆕 Trade-Augmented Learning: ดึง closed trades (WIN/LOSS) จาก DB
+    คืนค่า DataFrame[time, side, outcome] หรือ None ถ้าไม่มี/error.
+    side: 0=SELL, 2=BUY ; outcome: 'WIN'/'LOSS'
+    """
+    try:
+        import pandas as pd
+        from .paths import db_path  # type: ignore
+        import sqlite3
+        cfg_d = Config.section("database") or {}
+        path = db_path(cfg_d.get("filename", "hyper_trades.sqlite"))
+        if not path.exists():
+            return None
+        with sqlite3.connect(str(path)) as conn:
+            df = pd.read_sql_query(
+                "SELECT ts_utc, prediction, status FROM decisions "
+                "WHERE symbol=? AND status IN ('WIN','LOSS') "
+                "ORDER BY ts_utc",
+                conn, params=(symbol,),
+            )
+        if df.empty:
+            return None
+        df["time"] = pd.to_datetime(df["ts_utc"], utc=True, errors="coerce")
+        df = df.dropna(subset=["time"])
+        df = df.rename(columns={"prediction": "side", "status": "outcome"})
+        return df[["time", "side", "outcome"]]
+    except Exception as e:
+        log.warning("Trade-aug: failed to load DB outcomes: %s", e)
+        return None
+
+
+def _apply_trade_augmentation(X_part, y_part, sw_part, real_df,
+                              win_weight: float, loss_weight: float,
+                              loss_mode="flip", tolerance_min: int = 5):
+    """
+    🆕 Apply trade-aug: match real trade timestamps to bars in X_part,
+    boost their sample weights, optionally relabel LOSSes.
+
+    loss_mode (str or bool, backward-compatible):
+      - "flip"          : LOSS BUY (2) → SELL (0), LOSS SELL (0) → BUY (2)  ✨ recommended
+                          → keeps bot trading; learns reversal patterns
+      - "hold" / True   : LOSS → HOLD (1) — safe but can silence the bot over time
+      - "none" / False  : keep original label, just boost weight
+
+    Returns (y_arr, sw_arr, n_matched, n_relabeled).
+    """
+    import pandas as pd
+    if real_df is None or real_df.empty:
+        return y_part.values, sw_part, 0, 0
+    if not isinstance(X_part.index, pd.DatetimeIndex):
+        return y_part.values, sw_part, 0, 0
+
+    y_arr = y_part.values.copy()
+    sw_arr = sw_part.copy()
+    n_matched, n_relabeled = 0, 0
+    tol = pd.Timedelta(minutes=tolerance_min)
+
+    # Normalise mode (back-compat: True→hold, False→none)
+    if isinstance(loss_mode, bool):
+        loss_mode = "hold" if loss_mode else "none"
+    mode = str(loss_mode or "flip").lower()
+
+    # Subset real trades within partition window
+    t_lo, t_hi = X_part.index.min(), X_part.index.max()
+    sub = real_df[(real_df["time"] >= t_lo) & (real_df["time"] <= t_hi)]
+    if sub.empty:
+        return y_arr, sw_arr, 0, 0
+
+    # Vectorized nearest-neighbor match (align dtype/tz to X_part.index)
+    target = pd.DatetimeIndex(sub["time"]).tz_convert(X_part.index.tz) if X_part.index.tz else \
+             pd.DatetimeIndex(sub["time"]).tz_localize(None)
+    target = target.astype(X_part.index.dtype)
+    pos = X_part.index.get_indexer(target, method="nearest", tolerance=tol)
+    valid = pos >= 0
+    matched_pos = pos[valid]
+    matched_outcome = sub["outcome"].values[valid]
+    matched_side = sub["side"].values[valid]   # 0=SELL, 2=BUY
+
+    for p, outcome, side in zip(matched_pos, matched_outcome, matched_side):
+        if outcome == "LOSS":
+            sw_arr[p] = sw_arr[p] * float(loss_weight)
+            if mode == "flip":
+                # BUY loss → SELL ; SELL loss → BUY ; HOLD untouched
+                side_i = int(side)
+                new_label = 0 if side_i == 2 else (2 if side_i == 0 else 1)
+                if y_arr[p] != new_label:
+                    y_arr[p] = new_label
+                    n_relabeled += 1
+            elif mode == "hold":
+                if y_arr[p] != 1:
+                    y_arr[p] = 1
+                    n_relabeled += 1
+            # "none" → just weight boost
+        elif outcome == "WIN":
+            sw_arr[p] = sw_arr[p] * float(win_weight)
+        n_matched += 1
+
+    return y_arr, sw_arr, n_matched, n_relabeled
+
+
 def _build_xgb(n_estimators: int = 800, with_early_stop: bool = True) -> XGBClassifier:
     kwargs = dict(
         objective="multi:softprob",
@@ -90,6 +191,33 @@ def train_from_mt5(symbol: Optional[str] = None,
     n = len(X)
     log.info("Dataset: %d rows x %d features", n, X.shape[1])
 
+    # 🆕 Trade-Augmented Learning: relabel BEFORE split so real trades
+    # (which sit at the END of the dataset) actually take effect.
+    ta_cfg = cfg_a.get("trade_augmentation") or {}
+    real_outcomes = None
+    if ta_cfg.get("enabled", False):
+        min_trades = int(ta_cfg.get("min_db_trades", 500))
+        win_w_g = float(ta_cfg.get("win_weight", 2.0))
+        loss_w_g = float(ta_cfg.get("loss_weight", 3.0))
+        loss_mode_g = ta_cfg.get("loss_mode", ta_cfg.get("relabel_loss_to_hold", "flip"))
+        real_outcomes = _load_real_trade_outcomes(symbol)
+        if real_outcomes is None or len(real_outcomes) < min_trades:
+            log.warning("Trade-aug: skipped (have %d trades, need %d)",
+                        0 if real_outcomes is None else len(real_outcomes), min_trades)
+            real_outcomes = None
+        else:
+            log.info("Trade-aug: %d real trades loaded (win_w=%.1f loss_w=%.1f loss_mode=%s)",
+                     len(real_outcomes), win_w_g, loss_w_g, loss_mode_g)
+            # Relabel on FULL y first (placeholder sw, we recompute per-partition below)
+            sw_placeholder = np.ones(len(y), dtype=float)
+            y_full_arr, _, n_match_full, n_rel_full = _apply_trade_augmentation(
+                X, y, sw_placeholder, real_outcomes, win_w_g, loss_w_g, loss_mode_g)
+            log.info("Trade-aug (full): matched %d bars, relabeled %d losses",
+                     n_match_full, n_rel_full)
+            # Replace y with relabeled version (preserve original index)
+            import pandas as pd
+            y = pd.Series(y_full_arr, index=y.index, name=y.name).astype(int)
+
     train_end = int(n * 0.70)
     val_end = int(n * 0.85)
     X_tr, y_tr = X.iloc[:train_end], y.iloc[:train_end]
@@ -108,6 +236,17 @@ def train_from_mt5(symbol: Optional[str] = None,
             mask = (y_tr.values == cls_int)
             sw_tr[mask] = sw_tr[mask] * float(mult)
 
+    # 🆕 Trade-Augmented Learning: weight boost on training partition
+    y_tr_arr = y_tr.values
+    if real_outcomes is not None:
+        win_w = float(ta_cfg.get("win_weight", 2.0))
+        loss_w = float(ta_cfg.get("loss_weight", 3.0))
+        loss_mode = ta_cfg.get("loss_mode", ta_cfg.get("relabel_loss_to_hold", "flip"))
+        y_tr_arr, sw_tr, n_match, n_rel = _apply_trade_augmentation(
+            X_tr, y_tr, sw_tr, real_outcomes, win_w, loss_w, loss_mode)
+        log.info("Trade-aug (train partition): matched %d bars, weight-boosted (%d also relabeled in train)",
+                 n_match, n_rel)
+
     tscv = TimeSeriesSplit(n_splits=4)
     cv_accs = []
     for k, (i_tr, i_va) in enumerate(tscv.split(X_tr), 1):
@@ -125,8 +264,8 @@ def train_from_mt5(symbol: Optional[str] = None,
         log.info("  CV %d/4 acc=%.4f best_iter=%d", k, acc, m.best_iteration)
     log.info("CV mean=%.4f std=%.4f", float(np.mean(cv_accs)), float(np.std(cv_accs)))
 
-    final = _build_xgb(n_estimators=2500, with_early_stop=True)
-    final.fit(X_tr, y_tr, sample_weight=sw_tr, eval_set=[(X_va, y_va)], verbose=False)
+    final = _build_xgb(n_estimators=4000, with_early_stop=True)
+    final.fit(X_tr, y_tr_arr, sample_weight=sw_tr, eval_set=[(X_va, y_va)], verbose=False)
     best_iter = int(final.best_iteration)
     val_acc = float(final.score(X_va, y_va))
     test_acc = float(final.score(X_te, y_te))
@@ -172,6 +311,62 @@ def train_from_mt5(symbol: Optional[str] = None,
         log.debug("feature importance failed: %s", e)
 
     out = model_path(cfg_a["model_filename"])
+
+    # 🆕 Model Acceptance Gate — กันรีเทรนแล้วแย่ลง
+    # เปรียบเทียบ test_acc ของ model เก่า (ถ้ามี) บน same OOS set
+    # ถ้า new < old - max_drop_pct → REJECT, keep old model
+    gate_cfg = cfg_a.get("acceptance_gate") or {}
+    if gate_cfg.get("enabled", True) and out.exists():
+        try:
+            max_drop = float(gate_cfg.get("max_test_acc_drop_pct", 3.0)) / 100.0
+            min_oos_acc = float(gate_cfg.get("min_oos_test_acc", 0.40))
+            old_bundle = joblib.load(out)
+            old_model = old_bundle["model"]
+            old_features = old_bundle.get("features", FEATURE_COLUMNS)
+            # ใช้ X_te ปัจจุบัน (subset features ให้ตรงกับ old model)
+            try:
+                X_te_old = X_te[old_features]
+                old_test_acc = float(old_model.score(X_te_old, y_te))
+            except Exception as e:
+                log.warning("Acceptance gate: cannot score old model (%s) → accept new",
+                            e)
+                old_test_acc = -1.0
+
+            decision = "ACCEPT"
+            reason = ""
+            if test_acc < min_oos_acc:
+                decision = "REJECT"
+                reason = f"new acc {test_acc:.4f} < min_oos_acc {min_oos_acc}"
+            elif old_test_acc > 0 and test_acc < (old_test_acc - max_drop):
+                decision = "REJECT"
+                reason = (f"new {test_acc:.4f} drops > {max_drop*100:.1f}% "
+                          f"vs old {old_test_acc:.4f}")
+            else:
+                old_str = f"{old_test_acc:.4f}" if old_test_acc > 0 else "n/a"
+                reason = f"new {test_acc:.4f} vs old {old_str}"
+
+            log.info("🚦 Acceptance Gate: %s — %s", decision, reason)
+            if decision == "REJECT":
+                log.warning("⛔ Keeping OLD model — new model rejected")
+                # อัพเดท meta เพื่อบันทึก attempt ที่ถูก reject
+                rej_meta_path = out.parent / (out.stem + "_rejected.json")
+                rej_meta_path.write_text(json.dumps({
+                    "rejected_at_utc": datetime.now(timezone.utc).isoformat(),
+                    "reason": reason,
+                    "new_test_acc": test_acc,
+                    "old_test_acc": old_test_acc,
+                    "min_required": min_oos_acc,
+                }, indent=2), encoding="utf-8")
+                # คืน meta แต่ไม่ overwrite model
+                return {
+                    "rejected": True,
+                    "reason": reason,
+                    "new_test_acc": test_acc,
+                    "old_test_acc": old_test_acc,
+                }
+        except Exception as e:
+            log.warning("Acceptance gate failed (will accept new): %s", e)
+
     joblib.dump({"model": final, "features": FEATURE_COLUMNS}, out)
 
     meta = {
