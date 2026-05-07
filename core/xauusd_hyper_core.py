@@ -120,7 +120,21 @@ class HyperBot:
         self._cached_balance: float = 0.0
         self._cached_balance_ts: float = 0.0
         self._recent_predictions: list = []   # multi-bar confirmation history
-        self._trades_at_last_train = self.db.count_settled()
+        # Initialise retrain counter from model timestamp so restarts don't reset it
+        self._trades_at_last_train = self._count_trades_before_model()
+
+    def _count_trades_before_model(self) -> int:
+        """Count settled trades that occurred BEFORE the current model was trained.
+        This becomes the baseline for retrain triggering — so restart won't reset it."""
+        try:
+            from datetime import datetime, timezone
+            p = model_path(self.cfg_a["model_filename"])
+            if not p.exists():
+                return 0
+            model_ts = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)
+            return int(self.db.count_settled_before(model_ts))
+        except Exception:
+            return self.db.count_settled()
 
     # ============================================================ model
     def _load_model(self) -> bool:
@@ -608,7 +622,12 @@ class HyperBot:
         volume_floor = self.recovery.cumulative_losing_volume * prof_vol_mult
 
         # 4) Final = max ของทั้ง 3 floors, capped by absolute (จาก dynamic scaling)
+        #    🔒 ปัด UP ตาม volume_step ก่อน normalize เพื่อกัน banker's rounding
+        #       ทำให้ recovery floor ถูกปัดลงเป็น base_lot (ไม้แก้ไม่โต)
         candidate = max(geometric_floor, recovery_lot, volume_floor)
+        step = spec.volume_step if spec.volume_step > 0 else 0.01
+        import math
+        candidate = math.ceil(candidate / step - 1e-9) * step
         final = min(candidate, absolute_cap)
         final = spec.normalize_volume(final)
 
@@ -843,8 +862,14 @@ class HyperBot:
         be_buf = be_buf_pips * 10 * pip_factor * spec.point
         com_offset = commission_price_offset(spec)
         be_lock = be_buf + com_offset
-        trail_dist = float(self.cfg_st.get("trail_distance_atr", 0.3)) * atr_value
-        trail_step = float(self.cfg_st.get("trail_step_atr", 0.2)) * atr_value
+
+        # 🆕 Percentage-based trailing: ทิ้งระยะ X% ของระยะที่ราคาวิ่งไป (lock (100-X)% ของกำไร)
+        # mode="percentage" → trail_dist = profit_price × trail_pct  (default 30% → lock 70%)
+        # mode="atr"        → trail_dist = trail_distance_atr × ATR  (legacy คงที่)
+        trail_mode = str(self.cfg_st.get("trail_mode", "percentage")).lower()
+        trail_pct = max(0.05, min(0.95, float(self.cfg_st.get("trail_pct_of_excursion", 0.30))))
+        trail_dist_atr_val = float(self.cfg_st.get("trail_distance_atr", 0.3)) * atr_value
+        trail_step = float(self.cfg_st.get("trail_step_atr", 0.1)) * atr_value
 
         for p in live:
             entry = float(p.price_open)
@@ -853,6 +878,15 @@ class HyperBot:
             profit_price = (cur - entry) if is_buy else (entry - cur)
             if profit_price < be_trigger:
                 continue
+
+            # คำนวณ trail distance ตาม mode
+            if trail_mode == "percentage":
+                trail_dist = profit_price * trail_pct
+                # เผื่อ minimum (กัน trail แคบเกินจน MT5 reject)
+                trail_dist = max(trail_dist, 0.10 * atr_value)
+            else:
+                trail_dist = trail_dist_atr_val
+
             if is_buy:
                 sl_target = max(entry + be_lock, cur - trail_dist)
             else:
@@ -865,8 +899,10 @@ class HyperBot:
             if (not is_buy) and cur_sl > 0 and sl_target >= cur_sl - trail_step:
                 continue
             if modify_position_sl(p.ticket, new_sl=sl_target, new_tp=p.tp):
-                log.info("📈 เลื่อน SL ไม้ #%d (กำไรแล้ว %.3f) | SL: %.3f → %.3f",
-                         p.ticket, profit_price, cur_sl, sl_target)
+                lock_pct = (1.0 - trail_pct) * 100 if trail_mode == "percentage" else 0.0
+                mode_tag = ("pct lock %.0f%%" % lock_pct) if trail_mode == "percentage" else "atr"
+                log.info("📈 เลื่อน SL ไม้ #%d [%s] | กำไรวิ่ง %.3f → SL: %.3f → %.3f (ทิ้งระยะ %.3f)",
+                         p.ticket, mode_tag, profit_price, cur_sl, sl_target, trail_dist)
 
     # ============================================================ global equity stop
     def _maybe_global_equity_stop(self) -> None:
