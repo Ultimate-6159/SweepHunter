@@ -19,11 +19,11 @@
 ลองนึกภาพว่าคุณมี "เทรดเดอร์มืออาชีพ" ทำงานให้ตลอด 24 ชั่วโมง โดย:
 
 1. 🧠 **มองตลาด** ทุก 0.5 วินาที — พอแท่งเทียน M5 ปิด ให้ AI ทำนายว่า **ขึ้น / ลง / นิ่ง**
-2. 🎯 **เปิดออเดอร์** เฉพาะตอนที่ AI มั่นใจสูง (≥ 55%) และผ่านตัวกรอง 11 ชั้น
+2. 🎯 **เปิดออเดอร์** เฉพาะตอนที่ AI มั่นใจสูง (≥ 55%) และผ่านตัวกรอง **14 ชั้น**
 3. 🛡️ **ตั้ง SL/TP** อัตโนมัติจาก ATR (TP = 1.6×ATR, SL = 1.2×ATR)
 4. ♻️ **ถ้าเสีย** — คำนวณ lot ใหม่ให้ "ไม้ถัดไปชนะแล้วกู้ทุนคืนได้" (ไม่ใช่ Martingale บ้าๆ)
-5. ✋ **ถ้าเสียติดเกิน max_steps** → ปิด series นั้น เริ่มใหม่
-6. 📊 **บันทึกทุกการเทรด** ลง SQLite + retrain โมเดลทุก 500 ออเดอร์ใหม่
+5. ✋ **ถ้าเสียติดเกิน max_steps** หรือ **ขาดทุนเกิน 8% balance** → ปิด series นั้น เริ่มใหม่
+6. 📊 **บันทึกทุกการเทรด** ลง SQLite + retrain โมเดลทุก 1000 ออเดอร์ใหม่ (มี **Acceptance Gate** กันรีเทรนแล้วแย่ลง)
 
 ---
 
@@ -70,12 +70,12 @@
 ### 🧮 สูตรคำนวณ Lot ไม้ Recovery
 
 ```python
-floor_geo     = base_lot × 1.7^step                       # โตแบบเรขาคณิต
+floor_geo     = base_lot × 1.5^step                       # โตแบบเรขาคณิต (เดิม 1.7 → 1.5 ปลอดภัยกว่า)
 floor_recover = (cum_loss + min_profit) ÷ profit_per_lot  # พอกู้ทุน + กำไร
-floor_volume  = sum(losing_lots) × 1.5                    # > รวม lot ที่เสียไป
+floor_volume  = sum(losing_lots) × 1.3                    # > รวม lot ที่เสียไป (เดิม 1.5 → 1.3)
 
 next_lot = max(floor_geo, floor_recover, floor_volume)
-next_lot = min(next_lot, max_lot_cap)                     # capped
+next_lot = min(next_lot, max_lot_cap)                     # capped (default 0.15)
 ```
 
 ### ⏱️ Lifecycle ของ Series
@@ -86,34 +86,38 @@ next_lot = min(next_lot, max_lot_cap)                     # capped
    ┌────┴────┐
   WIN       LOSS
    │         │
-   ✅ Reset  ♻️ RECOVERY (ไม้ที่ 2, lot โตขึ้น)
+   ✅ Reset  ♻️ RECOVERY (ไม้ที่ 2-5, lot โตขึ้น)
               │
          ┌────┴────┐
         WIN       LOSS
          │         │
-   ✅ กู้ทุน    🛑 ครบ max_steps (=2) → ปิด series → เริ่มใหม่
+   ✅ กู้ทุน    🛑 ครบ max_steps (=5) หรือ ขาดทุน > 8% balance → ปิด series
 ```
 
-### 📊 ตัวอย่างจริง (config ปัจจุบัน: max_steps=2)
+### 📊 ตัวอย่างจริง (config ปัจจุบัน: max_steps=5, mult=1.5, balance $500)
 
 | Step | Role | เสียสะสม | lot ที่ใช้ | ถ้า WIN | กำไรสุทธิ |
 |:---:|:---:|---:|---:|---:|---:|
-| 1 | 🟢 PRIMARY | — | 0.01 | +$2.50 | +$2.50 |
-| 2 | ♻️ RECOVERY | $1.92 | 0.02 | +$5.00 | +$3.08 |
-| 3 | 🛑 HALT | $5.84 | — | (ปิด series — เริ่มใหม่) | — |
+| 1 | 🟢 PRIMARY | — | 0.01 | +$2.40 | +$2.40 |
+| 2 | ♻️ RECOVERY | $2.40 | 0.022 | +$5.28 | +$2.88 |
+| 3 | ♻️ RECOVERY | $7.68 | 0.041 | +$9.84 | +$2.16 |
+| 4 | ♻️ RECOVERY | $17.52 | 0.10 | +$24.00 | +$6.48 |
+| 5 | ♻️ RECOVERY | $41.52 | 0.15 *(capped)* | +$36.00 | -$5.52 ❌ |
+| 6 | 🛑 HALT/Cap | $77.52 | — | (ปิด series → halt 30 นาที) | — |
 
-> 💡 **ทุกครั้งที่ WIN ระหว่าง series → ได้กำไรสุทธิอย่างน้อย `min_profit_target_usd` ($3)**
+> 💡 **ระบบเลือก lot ที่ "ใหญ่ที่สุดใน 3 floors"** — มักเป็น `floor_volume` ตอนเสียติด 3-4 ไม้  
+> 🛡️ **Per-Series Loss Cap** จะปิด series ก่อนถึงจุดระเบิด (ถ้าขาดทุน > 8% balance)
 
 ---
 
-## 🚦 ระบบป้องกันความเสี่ยง 11 ชั้น
+## 🚦 ระบบป้องกันความเสี่ยง 14 ชั้น
 
 ก่อนยิงแต่ละออเดอร์ ต้องผ่านด่านทั้งหมดนี้ — ไม่ผ่านด่านเดียว = ไม่เทรด
 
 | # | กลไก | ป้องกัน |
 |:-:|---|---|
 | 1️⃣ | **Confidence ≥ threshold** | กรองสัญญาณอ่อน |
-| 2️⃣ | **Per-Direction Threshold** | แก้ AI bias (BUY 0.62 / SELL 0.55) |
+| 2️⃣ | **Per-Direction Threshold** | แก้ AI bias (BUY 0.55 / SELL 0.62) |
 | 3️⃣ | **Trend Filter** (ema_dist_atr) | ห้ามเทรดทวนเทรนด์ (ปิดได้) |
 | 4️⃣ | **Multi-bar Confirmation** | signal ต้องติดกัน N แท่ง |
 | 5️⃣ | **FOMO Exhaustion Guard** | ไม่เข้าตอนสุดเทรนด์ (ปิดได้) |
@@ -122,7 +126,10 @@ next_lot = min(next_lot, max_lot_cap)                     # capped
 | 8️⃣ | **Dynamic Spread Guard** | ไม่เทรดตอน spread ผิดปกติ |
 | 9️⃣ | **News Filter** (Forex Factory) | หยุด ±10 นาทีรอบข่าว High |
 | 🔟 | **Max Steps + Halt** | เสียติดเกิน → หยุดพัก/reset |
-| 1️⃣1️⃣ | **Global Equity Stop** | ขาดทุนรวม ≥ 15% balance → ปิดทุกไม้ |
+| 1️⃣1️⃣ | **Global Equity Stop** | ขาดทุนรวม ≥ 18% balance → ปิดทุกไม้ |
+| 1️⃣2️⃣ | 🆕 **ATR-Spike Filter** | ATR > 2× ค่าเฉลี่ย 50 แท่ง → ข้าม (กันเทรดตอน volatile abnormal) |
+| 1️⃣3️⃣ | 🆕 **Direction-Flip Lock** | เสียทิศเดียวติด 2 ไม้ → block ทิศนั้น 30 นาที (กัน catching rocket) |
+| 1️⃣4️⃣ | 🆕 **Per-Series Loss Cap** | series เดียวขาดทุน > 8% balance → ปิด + halt 30 นาที (กันระเบิดก่อน max_steps) |
 
 ---
 
@@ -240,17 +247,26 @@ python run.py bot        # 🚀 เริ่มเทรด!
 ```json
 "recovery": {
   "enabled": true,
-  "max_steps": 2,
-  "lot_multiplier": 1.7,
+  "max_steps": 5,
+  "lot_multiplier": 1.5,
   "min_profit_target_usd": 3.0,
-  "profit_volume_multiplier": 1.5,
-  "max_lot_cap": 0.08,
+  "profit_volume_multiplier": 1.3,
+  "max_lot_cap": 0.15,
   "halt_after_max_steps_minutes": 0,
-  "global_equity_stop_pct": 15.0
+  "global_equity_stop_pct": 18.0
 }
 ```
 
-> 💡 **อยากให้นับ 3 ไม้แพ้ติดอยู่ series เดียว?** เปลี่ยน `max_steps: 3` แต่ระวัง lot จะโตเร็ว (0.01 × 1.7³ ≈ 0.05)
+> 💡 **อยากให้นับ 3 ไม้แพ้ติดอยู่ series เดียว?** เปลี่ยน `max_steps: 3` (ปลอดภัยกว่า แต่กู้ทุนยากขึ้น)
+
+### 🆕 Risk Filters (3 ชั้นป้องกันใหม่)
+```json
+"risk_filters": {
+  "atr_spike":       { "enabled": true, "rolling_bars": 50, "max_atr_ratio": 2.0 },
+  "direction_flip":  { "enabled": true, "min_consec_same_dir_losses": 2, "cooldown_minutes": 30 },
+  "series_loss_cap": { "enabled": true, "max_loss_pct_of_balance": 8.0, "halt_minutes": 30 }
+}
+```
 
 ### 🧠 AI & Filters
 ```json
@@ -258,8 +274,8 @@ python run.py bot        # 🚀 เริ่มเทรด!
   "min_confidence": 0.55,
   "directional_threshold": {
     "enabled": true,
-    "buy": 0.62,
-    "sell": 0.55
+    "buy": 0.55,
+    "sell": 0.62
   },
   "tick_confirmation": {
     "enabled": true,
@@ -270,16 +286,44 @@ python run.py bot        # 🚀 เริ่มเทรด!
 }
 ```
 
+### 🆕 Acceptance Gate (กันรีเทรนแล้วแย่ลง)
+```json
+"ai": {
+  "retrain_min_new_trades": 1000,
+  "retrain_check_interval_min": 1440,
+  "trade_augmentation": {
+    "enabled": true,
+    "min_db_trades": 500,
+    "win_weight": 1.5,
+    "loss_weight": 1.5,
+    "loss_mode": "none"
+  },
+  "acceptance_gate": {
+    "enabled": true,
+    "max_test_acc_drop_pct": 2.0,
+    "min_oos_test_acc": 0.42,
+    "min_dir_balance_ratio": 0.55,
+    "max_dir_balance_ratio": 1.8
+  }
+}
+```
+
+> 🚦 หลังรีเทรน → เปรียบเทียบกับ model เก่าบน OOS test set:
+> - ถ้า acc ลดลง > 2% → **REJECT** เก็บ model เก่า
+> - ถ้า BUY/SELL ratio < 0.55 หรือ > 1.8 → **REJECT** (model เอียงข้างเดียว)
+
 ### ⚡ Smart Trailing
 ```json
 "smart_trailing": {
   "enabled": true,
-  "disable_during_recovery": true,
-  "be_trigger_atr": 1.0,
-  "trail_distance_atr": 0.6,
-  "trail_step_atr": 0.3
+  "disable_during_recovery": false,
+  "be_trigger_atr": 0.5,
+  "be_buffer_pips": 2.0,
+  "trail_mode": "be_only"
 }
 ```
+
+> 💡 **Mode `be_only`** = ขยับ SL ไป break-even เท่านั้น ไม่ trail ต่อ → กัน early stop ตอน price retrace
 
 ---
 
@@ -330,8 +374,8 @@ python run.py bot        # 🚀 เริ่มเทรด!
 | 🎯 Win Rate | **55-65%** |
 | ⚖️ Avg RR | **~1.3 : 1** (TP=1.6×ATR / SL=1.2×ATR) |
 | 🔢 Concurrent Position | **1** (single position by design) |
-| 📉 Max DD ต่อ session | **≤ 15%** (Equity Stop) |
-| 🔄 Auto-Retrain | ทุก **500 trades ใหม่** หรือ 240 นาที |
+| 📉 Max DD ต่อ session | **≤ 18%** (Equity Stop) + **≤ 8% ต่อ series** (Loss Cap) |
+| 🔄 Auto-Retrain | ทุก **1000 trades ใหม่** หรือ 1440 นาที (24 ชม.) + Acceptance Gate |
 
 ---
 
@@ -367,5 +411,5 @@ Commercial — Private use only. ห้ามเผยแพร่ source code �
 
 <p align="center">
   <b>Made with 🧠 + ☕ for serious traders</b><br>
-  <sub>v2.x — Hyper-Frequency + Recovery + Anti-Bias Stack</sub>
+  <sub>v2.5 — Hyper-Frequency + Smart Recovery + Risk Filters + Acceptance Gate</sub>
 </p>
