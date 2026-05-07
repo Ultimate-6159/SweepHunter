@@ -334,6 +334,13 @@ def train_from_mt5(symbol: Optional[str] = None,
 
             decision = "ACCEPT"
             reason = ""
+            # 🆕 Direction Balance Check — กัน model เอียงทำนายข้างเดียว
+            min_dir_ratio = float(gate_cfg.get("min_dir_balance_ratio", 0.5))
+            max_dir_ratio = float(gate_cfg.get("max_dir_balance_ratio", 2.0))
+            n_buy_pred = int((y_pred == 2).sum())
+            n_sell_pred = int((y_pred == 0).sum())
+            dir_ratio = (n_buy_pred / n_sell_pred) if n_sell_pred > 0 else 999.0
+
             if test_acc < min_oos_acc:
                 decision = "REJECT"
                 reason = f"new acc {test_acc:.4f} < min_oos_acc {min_oos_acc}"
@@ -341,9 +348,14 @@ def train_from_mt5(symbol: Optional[str] = None,
                 decision = "REJECT"
                 reason = (f"new {test_acc:.4f} drops > {max_drop*100:.1f}% "
                           f"vs old {old_test_acc:.4f}")
+            elif dir_ratio < min_dir_ratio or dir_ratio > max_dir_ratio:
+                decision = "REJECT"
+                reason = (f"direction imbalance: BUY/SELL = {n_buy_pred}/{n_sell_pred} "
+                          f"= {dir_ratio:.2f} (need {min_dir_ratio}-{max_dir_ratio})")
             else:
                 old_str = f"{old_test_acc:.4f}" if old_test_acc > 0 else "n/a"
-                reason = f"new {test_acc:.4f} vs old {old_str}"
+                reason = (f"new {test_acc:.4f} vs old {old_str} | "
+                          f"BUY/SELL ratio={dir_ratio:.2f}")
 
             log.info("🚦 Acceptance Gate: %s — %s", decision, reason)
             if decision == "REJECT":
@@ -355,6 +367,9 @@ def train_from_mt5(symbol: Optional[str] = None,
                     "reason": reason,
                     "new_test_acc": test_acc,
                     "old_test_acc": old_test_acc,
+                    "buy_predicted": n_buy_pred,
+                    "sell_predicted": n_sell_pred,
+                    "dir_ratio": dir_ratio,
                     "min_required": min_oos_acc,
                 }, indent=2), encoding="utf-8")
                 # คืน meta แต่ไม่ overwrite model
