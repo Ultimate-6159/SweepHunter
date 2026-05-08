@@ -76,6 +76,17 @@ FEATURE_COLUMNS: List[str] = [
     "pat_swept_high_5",      # liquidity grab at high (sweep + reverse)
     "pat_swept_low_5",       # liquidity grab at low
     "pat_consec_streak",     # signed: + bull streak / - bear streak
+    # ---- 🆕 Support/Resistance + Multi-Pattern Aggregation (V3) ----
+    "sr_dist_pivot_high_50",   # ATRs to 50-bar resistance
+    "sr_dist_pivot_low_50",    # ATRs to 50-bar support
+    "sr_dist_round_50",        # ATRs to nearest 50-multiple price
+    "sr_dist_round_100",       # ATRs to nearest 100-multiple price
+    "sr_range_position_20",    # 0..1 position within 20-bar range
+    "mom_velocity_accel",      # velocity_5 acceleration
+    "mom_body_accel",          # body size acceleration
+    "mom_wick_imbalance",      # (upper - lower) / (upper + lower)
+    "mom_pattern_bull_5",      # count of bullish patterns in last 5 bars
+    "mom_pattern_bear_5",      # count of bearish patterns in last 5 bars
 ]
 
 
@@ -300,6 +311,45 @@ def build_features(rates) -> pd.DataFrame:
     streak_len = direction.groupby(streak_id).cumcount() + 1
     df["pat_consec_streak"] = (direction * streak_len).clip(-7, 7).fillna(0)
 
+    # ----- 🆕 V3: Support/Resistance + Multi-Pattern Aggregation -----
+    # ดูแท่งเทียนเยอะขึ้น (50 bars) + แนวรับแนวต้าน + รวม pattern หลายตัว
+
+    atr_safe2 = df["atr"].replace(0, np.nan)
+
+    # S/R Pivot levels (50-bar lookback) — กลายเป็น "ATR distance"
+    pivot_high_50 = h.shift(1).rolling(50, min_periods=20).max()
+    pivot_low_50 = l.shift(1).rolling(50, min_periods=20).min()
+    df["sr_dist_pivot_high_50"] = ((pivot_high_50 - c) / atr_safe2).clip(-10, 10).fillna(0)
+    df["sr_dist_pivot_low_50"] = ((c - pivot_low_50) / atr_safe2).clip(-10, 10).fillna(0)
+
+    # Round number distance (psychological levels) — gold uses 50/100 multiples
+    round_50 = (c / 50.0).round() * 50.0
+    round_100 = (c / 100.0).round() * 100.0
+    df["sr_dist_round_50"] = ((c - round_50).abs() / atr_safe2).clip(0, 10).fillna(1.0)
+    df["sr_dist_round_100"] = ((c - round_100).abs() / atr_safe2).clip(0, 10).fillna(1.0)
+
+    # Range position 0..1 (where in 20-bar range) — 0=at low (supp) 1=at high (res)
+    rh20 = h.rolling(20, min_periods=10).max()
+    rl20 = l.rolling(20, min_periods=10).min()
+    rng20 = (rh20 - rl20).replace(0, np.nan)
+    df["sr_range_position_20"] = ((c - rl20) / rng20).clip(0, 1).fillna(0.5)
+
+    # Momentum dynamics (acceleration = derivative of velocity)
+    velocity_5_safe = df["price_velocity_5"]
+    df["mom_velocity_accel"] = (velocity_5_safe - velocity_5_safe.shift(1)).fillna(0)
+    body_atr_safe = df["body_atr"]
+    df["mom_body_accel"] = (body_atr_safe - body_atr_safe.shift(1)).fillna(0)
+
+    # Wick imbalance: +1 = upper wick dominant (sellers up there)  -1 = lower wick (buyers down)
+    wick_total = (upper_wick + lower_wick + 1e-6)
+    df["mom_wick_imbalance"] = ((upper_wick - lower_wick) / wick_total).fillna(0)
+
+    # Multi-pattern aggregation in last 5 bars (sum of bullish vs bearish patterns)
+    bull_patterns = df["pat_engulf_bull"] + df["pat_swept_low_5"]
+    bear_patterns = df["pat_engulf_bear"] + df["pat_swept_high_5"]
+    df["mom_pattern_bull_5"] = bull_patterns.rolling(5, min_periods=1).sum().fillna(0)
+    df["mom_pattern_bear_5"] = bear_patterns.rolling(5, min_periods=1).sum().fillna(0)
+
     return df
 
 
@@ -397,6 +447,11 @@ def build_training_dataset(rates) -> Tuple[pd.DataFrame, pd.Series]:
              len(df_buy), len(df_sell), len(df_hold), hold_ratio)
     X = df_bal[FEATURE_COLUMNS].astype(float)
     y = df_bal["label"].astype(int)
+    # Set DatetimeIndex for downstream trade-augmentation matching
+    if "time" in df_bal.columns:
+        idx = pd.to_datetime(df_bal["time"], utc=True)
+        X.index = idx
+        y.index = idx
     return X, y
 
 

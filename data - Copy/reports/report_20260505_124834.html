@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>SweepHunter Report — 2026-05-05 12:48 UTC</title>
+<style>
+* { box-sizing: border-box; margin:0; padding:0; }
+body { font-family: 'Segoe UI', Arial, sans-serif; background: #f1f5f9; color: #1e293b; padding: 20px; }
+.container { max-width: 1200px; margin: 0 auto; }
+header { background: linear-gradient(135deg, #1e3a8a, #3b82f6); color: white; padding: 30px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+header h1 { font-size: 28px; margin-bottom: 8px; }
+header .sub { opacity: 0.85; font-size: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 15px; margin-bottom: 20px; }
+.card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+.card .label { font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.card .value { font-size: 28px; font-weight: 700; }
+.card .sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+.section { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 20px; }
+.section h2 { font-size: 18px; margin-bottom: 15px; color: #334155; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }
+table { width: 100%; border-collapse: collapse; }
+th { background: #f8fafc; padding: 10px; text-align: left; font-size: 12px; color: #64748b; text-transform: uppercase; border-bottom: 2px solid #e2e8f0; }
+td { padding: 10px; border-bottom: 1px solid #f1f5f9; font-size: 14px; }
+tr:hover { background: #f8fafc; }
+.pos { color: #10b981; font-weight: 600; }
+.neg { color: #ef4444; font-weight: 600; }
+.bar { width: 100px; height: 14px; background: #e2e8f0; border-radius: 4px; overflow: hidden; display: inline-block; vertical-align: middle; }
+.bar > div { height: 100%; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+footer { text-align: center; color: #94a3b8; font-size: 12px; margin-top: 30px; padding: 15px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>🏆 SweepHunter Trading Report</h1>
+    <div class="sub">Generated: 2026-05-05 12:48 UTC  •  Source: hyper_trades.sqlite</div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Total Trades</div>
+      <div class="value">470</div>
+      <div class="sub">262 wins / 208 losses</div>
+    </div>
+    <div class="card">
+      <div class="label">Win Rate</div>
+      <div class="value" style="color:#10b981">55.7%</div>
+      <div class="sub">break-even ~50%</div>
+    </div>
+    <div class="card">
+      <div class="label">Net P/L</div>
+      <div class="value" style="color:#ef4444">$-32.64</div>
+      <div class="sub">across all trades</div>
+    </div>
+    <div class="card">
+      <div class="label">Real RR</div>
+      <div class="value">0.78</div>
+      <div class="sub">avg_win / avg_loss</div>
+    </div>
+    <div class="card">
+      <div class="label">Profit Factor</div>
+      <div class="value">0.98</div>
+      <div class="sub">≥1 = profitable</div>
+    </div>
+    <div class="card">
+      <div class="label">Avg Win / Loss</div>
+      <div class="value" style="font-size:18px"><span class='pos'>$+5.30</span> / <span class='neg'>$-6.83</span></div>
+      <div class="sub">max $+29.20 / $-54.15</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>📈 Equity Curve</h2>
+    <svg viewBox='0 0 900 250' style='width:100%;max-width:900px;background:#0f172a;border-radius:8px'>
+        <line x1='20' y1='48.5' x2='880' y2='48.5' stroke='#999' stroke-dasharray='3,3'/>
+        <polyline points='20.0,48.5 21.8,48.5 23.7,48.5 25.5,48.5 27.3,48.5 29.2,48.5 31.0,48.5 32.8,48.5 34.7,48.5 36.5,48.5 38.3,48.5 40.2,48.5 42.0,48.5 43.8,48.5 45.7,48.5 47.5,48.5 49.3,48.5 51.2,48.5 53.0,48.5 54.8,48.5 56.7,48.5 58.5,48.5 60.3,48.5 62.2,48.5 64.0,48.5 65.8,48.5 67.7,48.5 69.5,48.5 71.3,48.5 73.2,48.5 75.0,48.5 76.8,48.5 78.7,48.5 80.5,48.5 82.3,48.5 84.2,46.7 86.0,49.3 87.8,51.7 89.7,51.3 91.5,51.0 93.3,48.1 95.2,46.8 97.0,49.2 98.8,47.3 100.7,49.6 102.5,48.5 104.3,51.4 106.2,50.1 108.0,43.5 109.9,46.0 111.7,50.0 113.5,46.6 115.4,43.8 117.2,41.3 119.0,44.0 120.9,43.5 122.7,43.0 124.5,48.1 126.4,42.7 128.2,51.7 130.0,46.1 131.9,23.0 133.7,42.4 135.5,64.5 137.4,66.8 139.2,68.9 141.0,74.9 142.9,47.5 144.7,37.8 146.5,27.8 148.4,40.1 150.2,62.0 152.0,72.2 153.9,134.2 155.7,100.8 157.5,76.1 159.4,122.6 161.2,128.2 163.0,133.4 164.9,138.8 166.7,133.6 168.5,128.6 170.4,132.4 172.2,129.0 174.0,125.4 175.9,129.0 177.7,132.8 179.5,137.0 181.4,141.1 183.2,148.2 185.0,161.9 186.9,157.1 188.7,152.0 190.5,146.8 192.4,154.8 194.2,168.9 196.0,164.1 197.9,159.0 199.7,154.0 201.5,161.2 203.4,175.2 205.2,170.2 207.0,177.1 208.9,184.8 210.7,194.4 212.5,186.4 214.4,178.5 216.2,172.3 218.0,166.1 219.9,159.6 221.7,151.9 223.5,162.5 225.4,176.3 227.2,165.8 229.0,159.5 230.9,154.0 232.7,149.7 234.5,145.3 236.4,141.2 238.2,137.1 240.0,142.0 241.9,151.7 243.7,156.3 245.5,166.1 247.4,172.2 249.2,178.6 251.0,173.2 252.9,181.1 254.7,174.9 256.5,171.1 258.4,167.2 260.2,163.1 262.0,169.6 263.9,182.0 265.7,177.3 267.5,184.4 269.4,177.8 271.2,171.0 273.0,180.6 274.9,191.0 276.7,185.2 278.6,183.5 280.4,189.3 282.2,183.3 284.1,187.4 285.9,184.2 287.7,189.3 289.6,185.1 291.4,180.9 293.2,176.7 295.1,172.3 296.9,178.3 298.7,170.1 300.6,176.2 302.4,168.0 304.2,164.0 306.1,160.1 307.9,156.8 309.7,162.1 311.6,173.3 313.4,169.1 315.2,164.3 317.1,159.6 318.9,154.9 320.7,163.2 322.6,157.2 324.4,151.6 326.2,160.6 328.1,153.4 329.9,146.3 331.7,138.5 333.6,130.8 335.4,126.3 337.2,122.3 339.1,126.0 340.9,132.8 342.7,136.1 344.6,132.2 346.4,129.7 348.2,127.8 350.1,125.9 351.9,123.2 353.7,120.5 355.6,117.3 357.4,122.6 359.2,116.4 361.1,111.2 362.9,105.9 364.7,104.5 366.6,101.7 368.4,98.9 370.2,102.8 372.1,99.0 373.9,94.9 375.7,89.6 377.6,84.0 379.4,77.4 381.2,88.6 383.1,100.5 384.9,92.3 386.7,84.2 388.6,77.2 390.4,88.7 392.2,80.4 394.1,72.6 395.9,66.8 397.7,60.5 399.6,54.8 401.4,48.0 403.2,41.5 405.1,35.9 406.9,31.3 408.7,25.7 410.6,20.0 412.4,28.9 414.2,40.8 416.1,31.1 417.9,47.8 419.7,66.1 421.6,83.0 423.4,100.3 425.2,89.0 427.1,105.3 428.9,121.9 430.7,137.0 432.6,120.7 434.4,118.8 436.2,122.9 438.1,117.4 439.9,114.4 441.7,111.9 443.6,109.1 445.4,112.9 447.2,107.3 449.1,104.5 450.9,108.9 452.8,114.3 454.6,110.1 456.4,105.0 458.3,98.1 460.1,109.4 461.9,100.9 463.8,111.8 465.6,107.9 467.4,114.5 469.3,121.5 471.1,129.3 472.9,144.7 474.8,138.8 476.6,147.8 478.4,165.0 480.3,158.9 482.1,152.6 483.9,145.9 485.8,143.8 487.6,138.6 489.4,133.4 491.3,127.7 493.1,120.9 494.9,113.7 496.8,125.1 498.6,116.9 500.4,106.4 502.3,120.4 504.1,139.7 505.9,132.6 507.8,126.9 509.6,121.3 511.4,131.4 513.3,145.6 515.1,160.8 516.9,143.2 518.8,150.7 520.6,161.4 522.4,165.5 524.3,172.2 526.1,177.5 527.9,173.7 529.8,179.6 531.6,186.4 533.4,194.3 535.3,202.4 537.1,217.3 538.9,212.1 540.8,218.1 542.6,230.0 544.4,225.1 546.3,220.6 548.1,215.5 549.9,223.3 551.8,213.2 553.6,207.5 555.4,202.3 557.3,196.8 559.1,191.3 560.9,200.1 562.8,188.0 564.6,196.7 566.4,188.1 568.3,201.4 570.1,195.7 571.9,205.0 573.8,198.3 575.6,191.1 577.4,184.6 579.3,177.7 581.1,188.8 582.9,178.0 584.8,171.2 586.6,163.2 588.4,155.2 590.3,146.8 592.1,137.9 593.9,150.6 595.8,168.6 597.6,176.9 599.4,187.3 601.3,193.5 603.1,186.4 604.9,191.4 606.8,187.4 608.6,193.4 610.4,200.3 612.3,211.8 614.1,207.5 615.9,203.0 617.8,199.4 619.6,204.5 621.4,197.6 623.3,193.9 625.1,189.7 627.0,185.5 628.8,190.6 630.6,183.2 632.5,179.7 634.3,176.2 636.1,172.6 638.0,178.6 639.8,191.5 641.6,186.3 643.5,180.9 645.3,175.2 647.1,169.5 649.0,163.2 650.8,157.4 652.6,164.0 654.5,176.9 656.3,172.8 658.1,178.7 660.0,170.6 661.8,176.5 663.6,188.6 665.5,195.0 667.3,189.4 669.1,183.3 671.0,177.1 672.8,186.3 674.6,178.9 676.5,189.3 678.3,201.4 680.1,190.9 682.0,179.3 683.8,171.5 685.6,181.5 687.5,171.5 689.3,178.1 691.1,184.5 693.0,179.5 694.8,173.8 696.6,168.7 698.5,164.3 700.3,160.2 702.1,156.6 704.0,152.3 705.8,158.7 707.6,166.3 709.5,160.7 711.3,154.4 713.1,147.6 715.0,154.5 716.8,162.3 718.6,156.5 720.5,149.4 722.3,143.3 724.1,137.6 726.0,131.9 727.8,126.0 729.6,135.0 731.5,128.3 733.3,136.2 735.1,143.8 737.0,132.8 738.8,127.7 740.6,123.4 742.5,129.6 744.3,136.8 746.1,131.5 748.0,141.0 749.8,133.9 751.6,142.8 753.5,136.8 755.3,132.6 757.1,142.4 759.0,152.7 760.8,144.3 762.6,135.3 764.5,149.5 766.3,137.1 768.1,131.0 770.0,124.2 771.8,117.1 773.6,127.6 775.5,119.3 777.3,110.8 779.1,102.5 781.0,93.6 782.8,107.2 784.6,97.5 786.5,87.1 788.3,104.1 790.1,90.7 792.0,76.6 793.8,99.6 795.7,135.5 797.5,130.4 799.3,138.1 801.2,127.1 803.0,121.6 804.8,128.0 806.7,121.9 808.5,125.5 810.3,123.2 812.2,120.9 814.0,125.1 815.8,118.6 817.7,115.1 819.5,120.7 821.3,126.7 823.2,121.9 825.0,129.7 826.8,144.2 828.7,139.9 830.5,136.4 832.3,133.1 834.2,130.4 836.0,127.6 837.8,131.6 839.7,125.9 841.5,130.5 843.3,126.6 845.2,122.4 847.0,117.8 848.8,112.4 850.7,107.1 852.5,101.5 854.3,96.0 856.2,90.6 858.0,85.4 859.8,92.7 861.7,83.1 863.5,81.1 865.3,87.1 867.2,79.2 869.0,85.3 870.8,76.6 872.7,83.6 874.5,91.3 876.3,99.4 878.2,92.8 880.0,85.9' fill='none' stroke='#ef4444' stroke-width='2'/>
+        <text x='20' y='15' fill='#94a3b8' font-size='11'>Equity Curve (cumulative P/L)</text>
+        <text x='880' y='15' fill='#ef4444' font-size='11' text-anchor='end'>End: $-32.64</text>
+        <text x='20' y='247' fill='#94a3b8' font-size='10'>Min: $-158.49</text>
+        <text x='880' y='247' fill='#94a3b8' font-size='10' text-anchor='end'>Max: $+24.88</text>
+    </svg>
+  </div>
+
+  <div class="two-col">
+    <div class="section">
+      <h2>🎯 Direction Breakdown</h2>
+      <table><thead><tr><th>Side</th><th>N</th><th>Wins</th><th>WR</th><th>Net P/L</th></tr></thead>
+      <tbody><tr>
+        <td><span style='background:#ef4444;color:white;padding:3px 10px;border-radius:6px;font-weight:600'>SELL</span></td>
+        <td>279</td><td>168</td>
+        <td>60.2%</td>
+        <td><span class='pos'>$+57.76</span></td>
+    </tr><tr>
+        <td><span style='background:#10b981;color:white;padding:3px 10px;border-radius:6px;font-weight:600'>BUY</span></td>
+        <td>191</td><td>94</td>
+        <td>49.2%</td>
+        <td><span class='neg'>$-90.40</span></td>
+    </tr></tbody></table>
+    </div>
+    <div class="section">
+      <h2>⚡ ATR Regime</h2>
+      <table><thead><tr><th>Regime</th><th>N</th><th>WR</th><th>Net P/L</th></tr></thead>
+      <tbody><tr>
+        <td><span style='background:#ef4444;color:white;padding:3px 10px;border-radius:6px'>HIGH</span></td>
+        <td>157</td><td>62.4%</td>
+        <td><span class='neg'>$-48.39</span></td>
+    </tr><tr>
+        <td><span style='background:#3b82f6;color:white;padding:3px 10px;border-radius:6px'>LOW</span></td>
+        <td>156</td><td>46.2%</td>
+        <td><span class='pos'>$+19.92</span></td>
+    </tr><tr>
+        <td><span style='background:#f59e0b;color:white;padding:3px 10px;border-radius:6px'>MID</span></td>
+        <td>157</td><td>58.6%</td>
+        <td><span class='neg'>$-4.17</span></td>
+    </tr></tbody></table>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>🕐 Win Rate per Hour (UTC)</h2>
+    <table><thead><tr><th>Hour</th><th>Trades</th><th>WR</th><th>Distribution</th><th>Net P/L</th></tr></thead>
+    <tbody><tr>
+        <td><b>00:00 UTC</b></td>
+        <td>31</td>
+        <td>45.2%</td>
+        <td><div class='bar'><div style='width:45.16129032258064%;background:#f59e0b'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-26.17</span></td>
+    </tr><tr>
+        <td><b>01:00 UTC</b></td>
+        <td>13</td>
+        <td>30.8%</td>
+        <td><div class='bar'><div style='width:30.76923076923077%;background:#ef4444'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-54.65</span></td>
+    </tr><tr>
+        <td><b>02:00 UTC</b></td>
+        <td>20</td>
+        <td>65.0%</td>
+        <td><div class='bar'><div style='width:65.0%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-21.17</span></td>
+    </tr><tr>
+        <td><b>03:00 UTC</b></td>
+        <td>11</td>
+        <td>72.7%</td>
+        <td><div class='bar'><div style='width:72.72727272727273%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='pos'>$+16.46</span></td>
+    </tr><tr>
+        <td><b>04:00 UTC</b></td>
+        <td>38</td>
+        <td>36.8%</td>
+        <td><div class='bar'><div style='width:36.84210526315789%;background:#ef4444'>&nbsp;</div></div></td>
+        <td><span class='pos'>$+13.64</span></td>
+    </tr><tr>
+        <td><b>05:00 UTC</b></td>
+        <td>44</td>
+        <td>40.9%</td>
+        <td><div class='bar'><div style='width:40.909090909090914%;background:#f59e0b'>&nbsp;</div></div></td>
+        <td><span class='pos'>$+23.69</span></td>
+    </tr><tr>
+        <td><b>06:00 UTC</b></td>
+        <td>42</td>
+        <td>59.5%</td>
+        <td><div class='bar'><div style='width:59.523809523809526%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='pos'>$+7.43</span></td>
+    </tr><tr>
+        <td><b>07:00 UTC</b></td>
+        <td>19</td>
+        <td>68.4%</td>
+        <td><div class='bar'><div style='width:68.42105263157895%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='pos'>$+21.98</span></td>
+    </tr><tr>
+        <td><b>08:00 UTC</b></td>
+        <td>31</td>
+        <td>54.8%</td>
+        <td><div class='bar'><div style='width:54.83870967741935%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-32.01</span></td>
+    </tr><tr>
+        <td><b>09:00 UTC</b></td>
+        <td>16</td>
+        <td>62.5%</td>
+        <td><div class='bar'><div style='width:62.5%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='pos'>$+38.62</span></td>
+    </tr><tr>
+        <td><b>10:00 UTC</b></td>
+        <td>25</td>
+        <td>68.0%</td>
+        <td><div class='bar'><div style='width:68.0%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='pos'>$+23.41</span></td>
+    </tr><tr>
+        <td><b>11:00 UTC</b></td>
+        <td>26</td>
+        <td>50.0%</td>
+        <td><div class='bar'><div style='width:50.0%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-18.78</span></td>
+    </tr><tr>
+        <td><b>12:00 UTC</b></td>
+        <td>24</td>
+        <td>75.0%</td>
+        <td><div class='bar'><div style='width:75.0%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='pos'>$+29.26</span></td>
+    </tr><tr>
+        <td><b>13:00 UTC</b></td>
+        <td>24</td>
+        <td>58.3%</td>
+        <td><div class='bar'><div style='width:58.333333333333336%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-16.55</span></td>
+    </tr><tr>
+        <td><b>14:00 UTC</b></td>
+        <td>14</td>
+        <td>64.3%</td>
+        <td><div class='bar'><div style='width:64.28571428571429%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-26.86</span></td>
+    </tr><tr>
+        <td><b>15:00 UTC</b></td>
+        <td>17</td>
+        <td>70.6%</td>
+        <td><div class='bar'><div style='width:70.58823529411765%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='pos'>$+45.87</span></td>
+    </tr><tr>
+        <td><b>16:00 UTC</b></td>
+        <td>4</td>
+        <td>25.0%</td>
+        <td><div class='bar'><div style='width:25.0%;background:#ef4444'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-30.41</span></td>
+    </tr><tr>
+        <td><b>17:00 UTC</b></td>
+        <td>9</td>
+        <td>77.8%</td>
+        <td><div class='bar'><div style='width:77.77777777777779%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-5.64</span></td>
+    </tr><tr>
+        <td><b>18:00 UTC</b></td>
+        <td>11</td>
+        <td>54.5%</td>
+        <td><div class='bar'><div style='width:54.54545454545454%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-22.50</span></td>
+    </tr><tr>
+        <td><b>19:00 UTC</b></td>
+        <td>13</td>
+        <td>38.5%</td>
+        <td><div class='bar'><div style='width:38.46153846153847%;background:#ef4444'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-9.21</span></td>
+    </tr><tr>
+        <td><b>20:00 UTC</b></td>
+        <td>7</td>
+        <td>28.6%</td>
+        <td><div class='bar'><div style='width:28.57142857142857%;background:#ef4444'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-19.10</span></td>
+    </tr><tr>
+        <td><b>22:00 UTC</b></td>
+        <td>15</td>
+        <td>66.7%</td>
+        <td><div class='bar'><div style='width:66.66666666666666%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='pos'>$+8.87</span></td>
+    </tr><tr>
+        <td><b>23:00 UTC</b></td>
+        <td>16</td>
+        <td>75.0%</td>
+        <td><div class='bar'><div style='width:75.0%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='pos'>$+21.18</span></td>
+    </tr></tbody></table>
+  </div>
+
+  <div class="section">
+    <h2>🎲 Win Rate by Confidence</h2>
+    <table><thead><tr><th>Bucket</th><th>N</th><th>WR</th><th>Distribution</th><th>Net P/L</th></tr></thead>
+    <tbody><tr>
+        <td><b>45-50%</b></td><td>45</td>
+        <td>64.4%</td>
+        <td><div class='bar'><div style='width:64.44444444444444%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-7.61</span></td>
+    </tr><tr>
+        <td><b>50-55%</b></td><td>62</td>
+        <td>66.1%</td>
+        <td><div class='bar'><div style='width:66.12903225806451%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-19.08</span></td>
+    </tr><tr>
+        <td><b>55-60%</b></td><td>116</td>
+        <td>53.4%</td>
+        <td><div class='bar'><div style='width:53.44827586206896%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-74.21</span></td>
+    </tr><tr>
+        <td><b><45%</b></td><td>81</td>
+        <td>28.4%</td>
+        <td><div class='bar'><div style='width:28.39506172839506%;background:#ef4444'>&nbsp;</div></div></td>
+        <td><span class='neg'>$-38.52</span></td>
+    </tr><tr>
+        <td><b>>=60%</b></td><td>166</td>
+        <td>64.5%</td>
+        <td><div class='bar'><div style='width:64.45783132530121%;background:#10b981'>&nbsp;</div></div></td>
+        <td><span class='pos'>$+106.78</span></td>
+    </tr></tbody></table>
+  </div>
+
+  <div class="two-col">
+    <div class="section">
+      <h2>📅 Daily P/L (last 14)</h2>
+      <table><thead><tr><th>Date</th><th>Trades</th><th>WR</th><th>Net</th></tr></thead>
+      <tbody><tr>
+        <td><b>2026-04-23</b></td><td>75</td>
+        <td>28.0%</td>
+        <td><span class='neg'>$-45.64</span></td>
+    </tr><tr>
+        <td><b>2026-04-24</b></td><td>50</td>
+        <td>50.0%</td>
+        <td><span class='neg'>$-62.38</span></td>
+    </tr><tr>
+        <td><b>2026-04-26</b></td><td>6</td>
+        <td>66.7%</td>
+        <td><span class='pos'>$+4.36</span></td>
+    </tr><tr>
+        <td><b>2026-04-27</b></td><td>50</td>
+        <td>66.0%</td>
+        <td><span class='pos'>$+36.06</span></td>
+    </tr><tr>
+        <td><b>2026-04-28</b></td><td>54</td>
+        <td>70.4%</td>
+        <td><span class='pos'>$+18.72</span></td>
+    </tr><tr>
+        <td><b>2026-04-29</b></td><td>40</td>
+        <td>52.5%</td>
+        <td><span class='neg'>$-53.30</span></td>
+    </tr><tr>
+        <td><b>2026-04-30</b></td><td>44</td>
+        <td>54.5%</td>
+        <td><span class='neg'>$-18.28</span></td>
+    </tr><tr>
+        <td><b>2026-05-01</b></td><td>54</td>
+        <td>63.0%</td>
+        <td><span class='pos'>$+26.06</span></td>
+    </tr><tr>
+        <td><b>2026-05-03</b></td><td>6</td>
+        <td>66.7%</td>
+        <td><span class='pos'>$+7.83</span></td>
+    </tr><tr>
+        <td><b>2026-05-04</b></td><td>54</td>
+        <td>63.0%</td>
+        <td><span class='pos'>$+23.34</span></td>
+    </tr><tr>
+        <td><b>2026-05-05</b></td><td>37</td>
+        <td>64.9%</td>
+        <td><span class='pos'>$+30.59</span></td>
+    </tr></tbody></table>
+    </div>
+    <div class="section">
+      <h2>♻️ Recovery Series Outcomes</h2>
+      <table><thead><tr><th>Status</th><th>N</th><th>Net P/L</th></tr></thead>
+      <tbody><tr><td><b>CLOSED_EQUITY_STOP</b></td><td>1</td><td><span class='neg'>$-94.75</span></td></tr><tr><td><b>CLOSED_MANUAL</b></td><td>3</td><td><span class='pos'>$+0.00</span></td></tr><tr><td><b>CLOSED_MAX_STEPS</b></td><td>57</td><td><span class='neg'>$-924.70</span></td></tr><tr><td><b>CLOSED_SL</b></td><td>4</td><td><span class='pos'>$+0.00</span></td></tr><tr><td><b>CLOSED_TP</b></td><td>241</td><td><span class='pos'>$+929.66</span></td></tr></tbody></table>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>📋 Recent 25 Trades</h2>
+    <table><thead><tr>
+      <th>Time</th><th>Side</th><th>Conf</th><th>ATR</th><th>Sprd</th>
+      <th>Vol</th><th>Entry</th><th>Close</th><th>Result</th><th>P/L</th>
+    </tr></thead><tbody><tr>
+        <td>05-05 12:25</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>51%</td>
+        <td>6.13</td>
+        <td>13</td>
+        <td>0.01</td>
+        <td>4572.19</td>
+        <td>4566.06</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+6.07</span></td>
+    </tr><tr>
+        <td>05-05 12:15</td>
+        <td><span style='color:#10b981;font-weight:600'>BUY</span></td>
+        <td>56%</td>
+        <td>5.77</td>
+        <td>13</td>
+        <td>0.01</td>
+        <td>4565.52</td>
+        <td>4571.29</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+5.71</span></td>
+    </tr><tr>
+        <td>05-05 11:50</td>
+        <td><span style='color:#10b981;font-weight:600'>BUY</span></td>
+        <td>56%</td>
+        <td>5.00</td>
+        <td>12</td>
+        <td>0.01</td>
+        <td>4562.40</td>
+        <td>4555.39</td>
+        <td><span style='color:#ef4444;font-weight:700'>LOSS</span></td>
+        <td><span class='neg'>$-7.07</span></td>
+    </tr><tr>
+        <td>05-05 11:25</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>54%</td>
+        <td>4.77</td>
+        <td>12</td>
+        <td>0.01</td>
+        <td>4554.40</td>
+        <td>4561.04</td>
+        <td><span style='color:#ef4444;font-weight:700'>LOSS</span></td>
+        <td><span class='neg'>$-6.70</span></td>
+    </tr><tr>
+        <td>05-05 11:10</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>60%</td>
+        <td>4.37</td>
+        <td>12</td>
+        <td>0.01</td>
+        <td>4549.99</td>
+        <td>4556.07</td>
+        <td><span style='color:#ef4444;font-weight:700'>LOSS</span></td>
+        <td><span class='neg'>$-6.14</span></td>
+    </tr><tr>
+        <td>05-05 10:45</td>
+        <td><span style='color:#10b981;font-weight:600'>BUY</span></td>
+        <td>69%</td>
+        <td>3.89</td>
+        <td>13</td>
+        <td>0.02</td>
+        <td>4545.28</td>
+        <td>4549.17</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+7.66</span></td>
+    </tr><tr>
+        <td>05-05 10:40</td>
+        <td><span style='color:#10b981;font-weight:600'>BUY</span></td>
+        <td>62%</td>
+        <td>3.94</td>
+        <td>12</td>
+        <td>0.01</td>
+        <td>4550.74</td>
+        <td>4545.45</td>
+        <td><span style='color:#ef4444;font-weight:700'>LOSS</span></td>
+        <td><span class='neg'>$-5.35</span></td>
+    </tr><tr>
+        <td>05-05 10:30</td>
+        <td><span style='color:#10b981;font-weight:600'>BUY</span></td>
+        <td>70%</td>
+        <td>3.69</td>
+        <td>12</td>
+        <td>0.02</td>
+        <td>4548.23</td>
+        <td>4551.72</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+6.86</span></td>
+    </tr><tr>
+        <td>05-05 10:15</td>
+        <td><span style='color:#10b981;font-weight:600'>BUY</span></td>
+        <td>60%</td>
+        <td>3.79</td>
+        <td>13</td>
+        <td>0.01</td>
+        <td>4553.13</td>
+        <td>4547.96</td>
+        <td><span style='color:#ef4444;font-weight:700'>LOSS</span></td>
+        <td><span class='neg'>$-5.23</span></td>
+    </tr><tr>
+        <td>05-05 09:05</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>48%</td>
+        <td>4.34</td>
+        <td>13</td>
+        <td>0.01</td>
+        <td>4555.19</td>
+        <td>4553.40</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+1.73</span></td>
+    </tr><tr>
+        <td>05-05 09:00</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>54%</td>
+        <td>4.22</td>
+        <td>12</td>
+        <td>0.02</td>
+        <td>4558.90</td>
+        <td>4554.65</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+8.38</span></td>
+    </tr><tr>
+        <td>05-05 08:25</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>48%</td>
+        <td>4.45</td>
+        <td>13</td>
+        <td>0.01</td>
+        <td>4551.98</td>
+        <td>4558.28</td>
+        <td><span style='color:#ef4444;font-weight:700'>LOSS</span></td>
+        <td><span class='neg'>$-6.36</span></td>
+    </tr><tr>
+        <td>05-05 07:55</td>
+        <td><span style='color:#10b981;font-weight:600'>BUY</span></td>
+        <td>66%</td>
+        <td>4.28</td>
+        <td>12</td>
+        <td>0.01</td>
+        <td>4545.33</td>
+        <td>4549.97</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+4.58</span></td>
+    </tr><tr>
+        <td>05-05 07:20</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>53%</td>
+        <td>4.64</td>
+        <td>12</td>
+        <td>0.01</td>
+        <td>4555.04</td>
+        <td>4550.30</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+4.68</span></td>
+    </tr><tr>
+        <td>05-05 06:50</td>
+        <td><span style='color:#10b981;font-weight:600'>BUY</span></td>
+        <td>60%</td>
+        <td>4.92</td>
+        <td>12</td>
+        <td>0.01</td>
+        <td>4548.88</td>
+        <td>4553.77</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+4.83</span></td>
+    </tr><tr>
+        <td>05-05 06:35</td>
+        <td><span style='color:#10b981;font-weight:600'>BUY</span></td>
+        <td>57%</td>
+        <td>4.97</td>
+        <td>13</td>
+        <td>0.01</td>
+        <td>4543.30</td>
+        <td>4548.27</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+4.91</span></td>
+    </tr><tr>
+        <td>05-05 06:20</td>
+        <td><span style='color:#10b981;font-weight:600'>BUY</span></td>
+        <td>70%</td>
+        <td>4.61</td>
+        <td>13</td>
+        <td>0.01</td>
+        <td>4538.87</td>
+        <td>4543.49</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+4.56</span></td>
+    </tr><tr>
+        <td>05-05 06:10</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>51%</td>
+        <td>4.98</td>
+        <td>12</td>
+        <td>0.01</td>
+        <td>4543.86</td>
+        <td>4539.05</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+4.75</span></td>
+    </tr><tr>
+        <td>05-05 05:35</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>58%</td>
+        <td>4.06</td>
+        <td>13</td>
+        <td>0.01</td>
+        <td>4547.24</td>
+        <td>4543.14</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+4.04</span></td>
+    </tr><tr>
+        <td>05-05 05:20</td>
+        <td><span style='color:#10b981;font-weight:600'>BUY</span></td>
+        <td>56%</td>
+        <td>3.71</td>
+        <td>12</td>
+        <td>0.01</td>
+        <td>4536.90</td>
+        <td>4540.57</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+3.61</span></td>
+    </tr><tr>
+        <td>05-05 05:15</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>55%</td>
+        <td>3.54</td>
+        <td>13</td>
+        <td>0.01</td>
+        <td>4540.26</td>
+        <td>4536.78</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+3.42</span></td>
+    </tr><tr>
+        <td>05-05 05:00</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>57%</td>
+        <td>2.69</td>
+        <td>13</td>
+        <td>0.01</td>
+        <td>4533.65</td>
+        <td>4537.58</td>
+        <td><span style='color:#ef4444;font-weight:700'>LOSS</span></td>
+        <td><span class='neg'>$-3.99</span></td>
+    </tr><tr>
+        <td>05-05 04:55</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>59%</td>
+        <td>2.54</td>
+        <td>13</td>
+        <td>0.02</td>
+        <td>4534.78</td>
+        <td>4532.25</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+4.94</span></td>
+    </tr><tr>
+        <td>05-05 04:35</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>52%</td>
+        <td>2.50</td>
+        <td>12</td>
+        <td>0.01</td>
+        <td>4533.15</td>
+        <td>4536.51</td>
+        <td><span style='color:#ef4444;font-weight:700'>LOSS</span></td>
+        <td><span class='neg'>$-3.42</span></td>
+    </tr><tr>
+        <td>05-05 04:20</td>
+        <td><span style='color:#ef4444;font-weight:600'>SELL</span></td>
+        <td>55%</td>
+        <td>2.43</td>
+        <td>12</td>
+        <td>0.01</td>
+        <td>4530.88</td>
+        <td>4528.45</td>
+        <td><span style='color:#10b981;font-weight:700'>WIN</span></td>
+        <td><span class='pos'>$+2.37</span></td>
+    </tr></tbody></table>
+  </div>
+
+  <footer>
+    🤖 SweepHunter AI • XAUUSD Hyper-Frequency Bot • Report generated by generate_report.py
+  </footer>
+</div>
+</body>
+</html>

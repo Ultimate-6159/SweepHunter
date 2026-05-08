@@ -1,0 +1,119 @@
+{
+  "symbol": "XAUUSD",
+  "timeframe": "M5",
+  "rows_trained": 99938,
+  "split": {
+    "train": 69956,
+    "val": 14991,
+    "test": 14991
+  },
+  "class_distribution": {
+    "2": 48185,
+    "0": 47605,
+    "1": 4148
+  },
+  "cv_acc_mean": 0.40890572510899864,
+  "cv_acc_std": 0.015006160017337088,
+  "val_acc": 0.44399973317323727,
+  "oos_test_acc": 0.4263891668334334,
+  "best_iteration": 2495,
+  "oos_classification_report": {
+    "SELL": {
+      "precision": 0.5146820126899808,
+      "recall": 0.4575626393808212,
+      "f1-score": 0.48444444444444446,
+      "support": 7623.0
+    },
+    "HOLD": {
+      "precision": 0.097708082026538,
+      "recall": 0.4278169014084507,
+      "f1-score": 0.1590834697217676,
+      "support": 568.0
+    },
+    "BUY": {
+      "precision": 0.464641173389209,
+      "recall": 0.3913235294117647,
+      "f1-score": 0.42484234054442405,
+      "support": 6800.0
+    },
+    "accuracy": 0.4263891668334334,
+    "macro avg": {
+      "precision": 0.3590104227019093,
+      "recall": 0.4255676900670122,
+      "f1-score": 0.35612341823687865,
+      "support": 14991.0
+    },
+    "weighted avg": {
+      "precision": 0.4761843207506783,
+      "recall": 0.4263891668334334,
+      "f1-score": 0.4450808702891099,
+      "support": 14991.0
+    }
+  },
+  "oos_confusion_matrix": [
+    [
+      3488,
+      1244,
+      2891
+    ],
+    [
+      150,
+      243,
+      175
+    ],
+    [
+      3139,
+      1000,
+      2661
+    ]
+  ],
+  "trained_at_utc": "2026-04-24T03:21:03.089054+00:00",
+  "feature_columns": [
+    "body_atr",
+    "upper_wick_body_ratio",
+    "lower_wick_body_ratio",
+    "candle_direction",
+    "upper_wick_fast_atr",
+    "lower_wick_fast_atr",
+    "body_fast_atr",
+    "price_velocity_2",
+    "price_velocity_5",
+    "ret_1",
+    "rsi_7",
+    "ema_dist_atr",
+    "vol_accel_3",
+    "vol_spike_10",
+    "breakout_up_5",
+    "breakout_dn_5",
+    "near_high_5",
+    "near_low_5",
+    "atr_ratio",
+    "time_sin",
+    "time_cos",
+    "session_score",
+    "htf1_trend_dir",
+    "htf1_ema_dist_atr",
+    "htf1_rsi_norm",
+    "htf2_trend_dir",
+    "htf2_ema_dist_atr",
+    "htf2_rsi_norm",
+    "pat_engulf_bull",
+    "pat_engulf_bear",
+    "pat_pinbar_top_5",
+    "pat_pinbar_bot_5",
+    "pat_inside_bar",
+    "pat_outside_bar",
+    "pat_range_expansion_3",
+    "pat_swept_high_5",
+    "pat_swept_low_5",
+    "pat_consec_streak"
+  ],
+  "min_confidence_target": 0.35,
+  "symbol_spec": {
+    "digits": 2,
+    "point": 0.01,
+    "tick_size": 0.01,
+    "tick_value": 1.0,
+    "contract_size": 100.0
+  }
+}

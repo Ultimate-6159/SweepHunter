@@ -1,0 +1,103 @@
+{
+  "symbol": "XAUUSD",
+  "timeframe": "M1",
+  "rows_trained": 99938,
+  "split": {
+    "train": 69956,
+    "val": 14991,
+    "test": 14991
+  },
+  "class_distribution": {
+    "0": 35148,
+    "2": 33955,
+    "1": 30835
+  },
+  "cv_acc_mean": 0.34180902008433994,
+  "cv_acc_std": 0.00597023519660792,
+  "val_acc": 0.34113801614301914,
+  "oos_test_acc": 0.3377359749182843,
+  "best_iteration": 500,
+  "oos_classification_report": {
+    "SELL": {
+      "precision": 0.34798142193640585,
+      "recall": 0.3717557251908397,
+      "f1-score": 0.3594759180660638,
+      "support": 5240.0
+    },
+    "HOLD": {
+      "precision": 0.3288907996560619,
+      "recall": 0.3241525423728814,
+      "f1-score": 0.3265044814340589,
+      "support": 4720.0
+    },
+    "BUY": {
+      "precision": 0.33431765450326933,
+      "recall": 0.3150467103955476,
+      "f1-score": 0.3243962341383545,
+      "support": 5031.0
+    },
+    "accuracy": 0.3377359749182843,
+    "macro avg": {
+      "precision": 0.3370632920319124,
+      "recall": 0.3369849926530896,
+      "f1-score": 0.3367922112128257,
+      "support": 14991.0
+    },
+    "weighted avg": {
+      "precision": 0.33738505404104646,
+      "recall": 0.3377359749182843,
+      "f1-score": 0.3373218875982252,
+      "support": 14991.0
+    }
+  },
+  "oos_confusion_matrix": [
+    [
+      1948,
+      1615,
+      1677
+    ],
+    [
+      1711,
+      1530,
+      1479
+    ],
+    [
+      1939,
+      1507,
+      1585
+    ]
+  ],
+  "trained_at_utc": "2026-04-23T03:44:51.777360+00:00",
+  "feature_columns": [
+    "body_atr",
+    "upper_wick_body_ratio",
+    "lower_wick_body_ratio",
+    "candle_direction",
+    "upper_wick_fast_atr",
+    "lower_wick_fast_atr",
+    "body_fast_atr",
+    "price_velocity_2",
+    "price_velocity_5",
+    "ret_1",
+    "rsi_7",
+    "ema_dist_atr",
+    "vol_accel_3",
+    "vol_spike_10",
+    "breakout_up_5",
+    "breakout_dn_5",
+    "near_high_5",
+    "near_low_5",
+    "atr_ratio",
+    "time_sin",
+    "time_cos",
+    "session_score"
+  ],
+  "min_confidence_target": 0.35,
+  "symbol_spec": {
+    "digits": 3,
+    "point": 0.001,
+    "tick_size": 0.001,
+    "tick_value": 0.1,
+    "contract_size": 100.0
+  }
+}

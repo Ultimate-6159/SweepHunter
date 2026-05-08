@@ -1,0 +1,98 @@
+{
+  "symbol": "XAUUSD",
+  "timeframe": "M5",
+  "rows_trained": 99938,
+  "split": {
+    "train": 69956,
+    "val": 14991,
+    "test": 14991
+  },
+  "class_distribution": {
+    "1": 95228,
+    "2": 2757,
+    "0": 1953
+  },
+  "cv_acc_mean": 0.9115361523286731,
+  "cv_acc_std": 0.008736926895621836,
+  "val_acc": 0.9250216796744714,
+  "oos_test_acc": 0.916683343339337,
+  "best_iteration": 1999,
+  "oos_classification_report": {
+    "SELL": {
+      "precision": 0.34962406015037595,
+      "recall": 0.5602409638554217,
+      "f1-score": 0.4305555555555556,
+      "support": 332.0
+    },
+    "HOLD": {
+      "precision": 0.9743552275882224,
+      "recall": 0.936911620064634,
+      "f1-score": 0.955266645177465,
+      "support": 14234.0
+    },
+    "BUY": {
+      "precision": 0.2849740932642487,
+      "recall": 0.5176470588235295,
+      "f1-score": 0.36758563074352546,
+      "support": 425.0
+    },
+    "accuracy": 0.916683343339337,
+    "macro avg": {
+      "precision": 0.5363177936676157,
+      "recall": 0.6715998809145284,
+      "f1-score": 0.5844692771588487,
+      "support": 14991.0
+    },
+    "weighted avg": {
+      "precision": 0.9409753510171428,
+      "recall": 0.916683343339337,
+      "f1-score": 0.9269851087296698,
+      "support": 14991.0
+    }
+  },
+  "oos_confusion_matrix": [
+    [
+      186,
+      146,
+      0
+    ],
+    [
+      346,
+      13336,
+      552
+    ],
+    [
+      0,
+      205,
+      220
+    ]
+  ],
+  "trained_at_utc": "2026-04-22T14:59:39.637504+00:00",
+  "feature_columns": [
+    "body_atr",
+    "wick_ratio_upper",
+    "wick_ratio_lower",
+    "upper_wick_atr",
+    "lower_wick_atr",
+    "candle_direction",
+    "rsi_14",
+    "ema_slope_pct",
+    "dist_ema_atr",
+    "dist_ema_pct",
+    "bb_pct",
+    "atr_ratio",
+    "volume_spike",
+    "ret_1",
+    "ret_5",
+    "consec_dir",
+    "time_sin",
+    "time_cos"
+  ],
+  "symbol_spec": {
+    "digits": 3,
+    "point": 0.001,
+    "tick_size": 0.001,
+    "tick_value": 0.1,
+    "contract_size": 100.0
+  }
+}

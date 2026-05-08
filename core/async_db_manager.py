@@ -239,6 +239,15 @@ class AsyncDBManager:
                 "SELECT COUNT(*) FROM decisions WHERE status IN ('WIN','LOSS')"
             ).fetchone()[0])
 
+    def count_settled_before(self, ts: datetime) -> int:
+        """Count settled trades that occurred BEFORE the given timestamp.
+        Used to initialise auto-retrain baseline so restarts don't reset the counter."""
+        with self._conn() as c:
+            return int(c.execute(
+                "SELECT COUNT(*) FROM decisions WHERE status IN ('WIN','LOSS') AND ts_utc < ?",
+                (ts.isoformat(),),
+            ).fetchone()[0])
+
     def count_orders_today_utc(self, only_primary: bool = True) -> int:
         midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         sql = ("SELECT COUNT(*) FROM decisions WHERE ts_utc >= ? "

@@ -17,6 +17,12 @@ log = get_logger("entry")
 def cmd_train() -> None:
     from core.model_trainer import train_from_mt5
     meta = train_from_mt5()
+    if meta.get("rejected"):
+        log.warning("RETRAIN REJECTED: %s | new_acc=%.4f old_acc=%.4f → keep old model",
+                    meta.get("reason", "?"),
+                    meta.get("new_test_acc", 0.0),
+                    meta.get("old_test_acc", 0.0))
+        return  # ไม่ rollback — model เก่ายังอยู่
     log.info("TRAINED: oos_acc=%.4f rows=%d", meta["oos_test_acc"], meta["rows_trained"])
 
 

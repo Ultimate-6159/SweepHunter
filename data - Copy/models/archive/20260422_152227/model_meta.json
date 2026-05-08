@@ -1,0 +1,103 @@
+{
+  "symbol": "XAUUSD",
+  "timeframe": "M5",
+  "rows_trained": 18836,
+  "split": {
+    "train": 13185,
+    "val": 2825,
+    "test": 2826
+  },
+  "class_distribution": {
+    "1": 14127,
+    "2": 2756,
+    "0": 1953
+  },
+  "cv_acc_mean": 0.9193445607646791,
+  "cv_acc_std": 0.007453614743908521,
+  "val_acc": 0.9231858407079646,
+  "oos_test_acc": 0.9249823071479123,
+  "best_iteration": 358,
+  "oos_classification_report": {
+    "SELL": {
+      "precision": 0.7913669064748201,
+      "recall": 0.9969788519637462,
+      "f1-score": 0.8823529411764706,
+      "support": 331.0
+    },
+    "HOLD": {
+      "precision": 0.9983914209115281,
+      "recall": 0.8995169082125604,
+      "f1-score": 0.9463786531130877,
+      "support": 2070.0
+    },
+    "BUY": {
+      "precision": 0.7757352941176471,
+      "recall": 0.9929411764705882,
+      "f1-score": 0.8710010319917441,
+      "support": 425.0
+    },
+    "accuracy": 0.9249823071479123,
+    "macro avg": {
+      "precision": 0.8551645405013318,
+      "recall": 0.963145645548965,
+      "f1-score": 0.8999108754271008,
+      "support": 2826.0
+    },
+    "weighted avg": {
+      "precision": 0.9406582403857143,
+      "recall": 0.9249823071479123,
+      "f1-score": 0.9275435506263251,
+      "support": 2826.0
+    }
+  },
+  "oos_confusion_matrix": [
+    [
+      330,
+      1,
+      0
+    ],
+    [
+      86,
+      1862,
+      122
+    ],
+    [
+      1,
+      2,
+      422
+    ]
+  ],
+  "trained_at_utc": "2026-04-22T15:20:35.433277+00:00",
+  "feature_columns": [
+    "body_atr",
+    "wick_ratio_upper",
+    "wick_ratio_lower",
+    "upper_wick_atr",
+    "lower_wick_atr",
+    "candle_direction",
+    "rsi_14",
+    "ema_slope_pct",
+    "dist_ema_atr",
+    "dist_ema_pct",
+    "bb_pct",
+    "atr_ratio",
+    "volume_spike",
+    "ret_1",
+    "ret_5",
+    "consec_dir",
+    "time_sin",
+    "time_cos",
+    "session_score",
+    "htf_dist_ema_atr",
+    "htf_ema_slope_pct",
+    "htf_rsi_14",
+    "htf_alignment"
+  ],
+  "symbol_spec": {
+    "digits": 3,
+    "point": 0.001,
+    "tick_size": 0.001,
+    "tick_value": 0.1,
+    "contract_size": 100.0
+  }
+}

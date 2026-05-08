@@ -64,6 +64,8 @@ class RecoveryState:
     # 🆕 Direction-block: ห้ามเทรดทิศนี้จนกว่าจะถึง ts (cooldown)
     blocked_side: Optional[str] = None
     block_side_until_ts: float = 0.0
+    # 🆕 Loss-cap pause-resume: นับว่า series นี้ถูก pause จาก loss cap มาแล้วกี่ครั้ง
+    pause_resume_count: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -78,6 +80,7 @@ class RecoveryState:
             "consec_same_dir_losses": self.consec_same_dir_losses,
             "blocked_side": self.blocked_side,
             "block_side_until_ts": self.block_side_until_ts,
+            "pause_resume_count": self.pause_resume_count,
         }
 
     @classmethod
@@ -94,6 +97,7 @@ class RecoveryState:
         s.consec_same_dir_losses = int(d.get("consec_same_dir_losses", 0))
         s.blocked_side = d.get("blocked_side")
         s.block_side_until_ts = float(d.get("block_side_until_ts", 0.0))
+        s.pause_resume_count = int(d.get("pause_resume_count", 0))
         return s
 
 
@@ -889,6 +893,7 @@ class HyperBot:
         self.recovery.consecutive_losses = 0
         self.recovery.series_id = None
         self.recovery.last_side = None
+        self.recovery.pause_resume_count = 0
 
     def _on_max_steps_exceeded(self) -> None:
         sid = self.recovery.series_id
@@ -913,8 +918,9 @@ class HyperBot:
         self.recovery.consecutive_losses = 0
         self.recovery.series_id = None
         self.recovery.last_side = None
+        self.recovery.pause_resume_count = 0
 
-    # 🆕 helper: ดึง balance (ใช้ cache ถ้ามี เพื่อไม่ query MT5 ทุกครั้ง)
+    # 🆕 helper: ดึง balance
     def _get_balance(self) -> float:
         try:
             now = time.time()
@@ -927,21 +933,37 @@ class HyperBot:
         except Exception:
             return 0.0
 
-    # 🆕 🅒 Series Loss Cap — ปิด series ก่อน max_steps ระเบิด
+    # 🆕 🅒 Series Loss Cap — Pause & Resume mode (default) หรือ Close mode
     def _on_series_loss_cap(self) -> None:
         sid = self.recovery.series_id
         cap_cfg = self.cfg_rf.get("series_loss_cap", {})
         halt_min = float(cap_cfg.get("halt_minutes", 30))
+        max_resumes = int(cap_cfg.get("max_pause_resumes", 2))
+        action = str(cap_cfg.get("action", "pause_resume")).lower()
+
+        # === PAUSE & RESUME mode: ให้โอกาสกู้คืน ===
+        if action == "pause_resume" and self.recovery.pause_resume_count < max_resumes:
+            self.recovery.pause_resume_count += 1
+            self.recovery.halted_until_ts = time.time() + halt_min * 60
+            log.warning("⏸️ Series PAUSED (#%d) — ขาดทุน $%.2f | resume %d/%d → halt %d นาที แล้วกลับมา recover ต่อ",
+                        sid or 0, self.recovery.cumulative_loss_usd,
+                        self.recovery.pause_resume_count, max_resumes, int(halt_min))
+            log.warning("   ↳ series ยังมีชีวิต ไม่ปิดทิ้ง — รอจังหวะดีแล้วลุยต่อ 💪")
+            # อย่า reset cumulative_loss / consecutive_losses → carry over เพื่อ recover ต่อ
+            return
+
+        # === CLOSE mode (หรือ pause-resume หมดโอกาสแล้ว) ===
+        reason_label = "LOSS_CAP_EXHAUSTED" if action == "pause_resume" else "LOSS_CAP"
         if sid is not None:
-            self.db.close_series(sid, status="CLOSED_LOSS_CAP",
+            self.db.close_series(sid, status=f"CLOSED_{reason_label}",
                                  final_pnl=-self.recovery.cumulative_loss_usd,
                                  total_volume=0.0, avg_entry_price=0.0,
-                                 notes=f"loss cap hit after {self.recovery.consecutive_losses} losses")
+                                 notes=f"loss cap final close after {self.recovery.pause_resume_count} pauses")
             self.webhook.series_closed({
                 "series_id": sid, "symbol": self.symbol,
                 "consecutive_losses": self.recovery.consecutive_losses,
                 "final_pnl": -self.recovery.cumulative_loss_usd,
-                "reason": "LOSS_CAP",
+                "reason": reason_label,
             })
         self.recovery.halted_until_ts = time.time() + halt_min * 60
         self.recovery.cumulative_loss_usd = 0.0
@@ -949,8 +971,8 @@ class HyperBot:
         self.recovery.consecutive_losses = 0
         self.recovery.series_id = None
         self.recovery.last_side = None
-        # อย่า reset direction tracking เพราะอาจ block ทิศนั้นต่อ
-        log.error("🛑 Series ปิดแล้ว → halt %d นาที", int(halt_min))
+        self.recovery.pause_resume_count = 0
+        log.error("🛑 Series ปิดถาวรแล้ว (ใช้โอกาส resume หมด) → halt %d นาที", int(halt_min))
 
     # ============================================================ smart trailing
     def _manage_trailing(self) -> None:
