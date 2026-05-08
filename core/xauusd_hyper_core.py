@@ -114,6 +114,7 @@ class HyperBot:
         self.cfg_r = Config.section("recovery") or {}
         self.cfg_as = Config.section("account_scaling") or {}
         self.cfg_rf = Config.section("risk_filters") or {}
+        self.cfg_hl = Config.section("hourly_lot_multiplier") or {}
 
         self.symbol = self.cfg_t["symbol"]
         self.timeframe = self.cfg_t.get("timeframe", "M1")
@@ -558,8 +559,42 @@ class HyperBot:
         if lot <= 0:
             log.warning("Computed lot <= 0, skip")
             return
+        # 🆕 Hourly lot multiplier — เพิ่ม lot ในชั่วโมงดี ลดในชั่วโมงแย่
+        lot = self._apply_hourly_lot_multiplier(lot, spec)
+        if lot <= 0:
+            return
         self._open_trade(side, conf, atr_value, cur_spread, lot)
         self._last_entry_ts = time.time()
+
+    # 🆕 Hourly Lot Multiplier — soft filter จาก stats per UTC hour
+    def _apply_hourly_lot_multiplier(self, lot: float, spec) -> float:
+        """
+        ปรับ lot ตามชั่วโมง UTC ปัจจุบัน:
+          - ชั่วโมงที่ทำกำไรดี → คูณ > 1 (เพิ่ม lot)
+          - ชั่วโมงที่ขาดทุนหนัก → คูณ < 1 (ลด lot, ยังเทรดเก็บสถิติ)
+        Config: ai.hourly_lot_multiplier.{enabled, multipliers, min_lot, default}
+        """
+        if not self.cfg_hl.get("enabled", False):
+            return lot
+        from datetime import datetime, timezone
+        h = datetime.now(timezone.utc).hour
+        mults = self.cfg_hl.get("multipliers", {}) or {}
+        default = float(self.cfg_hl.get("default", 1.0))
+        mult = float(mults.get(str(h), default))
+        if abs(mult - 1.0) < 1e-6:
+            return lot
+        # คูณแล้ว clamp กับ min_lot ของ broker
+        new_lot = lot * mult
+        min_lot = float(self.cfg_hl.get("min_lot", spec.volume_min if hasattr(spec, "volume_min") else 0.01))
+        if new_lot < min_lot:
+            # ถ้า mult เล็กมากจน lot ต่ำกว่า min broker → ใช้ min_lot (ยังเทรดเก็บสถิติ)
+            new_lot = min_lot
+        # round to 2 decimals
+        new_lot = round(new_lot, 2)
+        emoji = "🚀" if mult > 1.2 else ("🐢" if mult < 0.8 else "➖")
+        log.info("%s Hourly mult: hour=%02d UTC × %.2f → lot %.2f → %.2f",
+                 emoji, h, mult, lot, new_lot)
+        return new_lot
 
     # ============================================================ lot calc
     def _dynamic_lot_caps(self, spec, atr_value: float) -> tuple:

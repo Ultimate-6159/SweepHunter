@@ -1,0 +1,89 @@
+================================================================================
+📅 SERIES ใน 24 ชม. ล่าสุด (เรียงตามเวลา)
+================================================================================
+  13:35:00 #367  BUY  steps=1  CLOSED_TP            💚 $+2.82
+  16:05:00 #368  SELL steps=1  CLOSED_TP            💚 $+20.82
+  16:30:00 #369  BUY  steps=1  CLOSED_TP            💚 $+4.12
+  18:50:00 #370  BUY  steps=1  CLOSED_TP            💚 $+10.38
+  19:25:00 #371  BUY  steps=1  CLOSED_TP            💚 $+6.65
+  20:10:00 #372  BUY  steps=1  CLOSED_TP            💚 $+0.20
+  22:00:08 #373  BUY  steps=1  CLOSED_TP            💚 $+1.01
+  22:35:00 #374  SELL steps=1  CLOSED_TP            💚 $+1.95
+  23:00:00 #375  SELL steps=1  CLOSED_TP            💚 $+20.62
+  00:00:00 #376  SELL steps=1  CLOSED_TP            💚 $+0.60
+  00:05:00 #377  SELL steps=1  CLOSED_TP            💚 $+17.88
+  00:20:00 #378  SELL steps=1  CLOSED_TP            💚 $+5.60
+  00:35:00 #379  SELL steps=1  CLOSED_TP            💚 $+3.62
+  01:05:00 #380  BUY  steps=1  CLOSED_TP            💚 $+2.42
+  01:50:00 #381  SELL steps=1  CLOSED_TP            💚 $+16.47
+  04:00:00 #382  BUY  steps=1  CLOSED_TP            💚 $+0.50
+  04:10:00 #383  BUY  steps=1  CLOSED_TP            💚 $+9.64
+  05:35:00 #384  SELL steps=1  CLOSED_TP            💚 $+0.40
+  05:50:00 #385  SELL steps=1  CLOSED_TP            💚 $+15.10
+  06:15:00 #386  SELL steps=1  CLOSED_TP            💚 $+2.49
+  07:25:00 #387  BUY  steps=1  CLOSED_TP            💚 $+24.85
+  08:45:00 #388  BUY  steps=1  CLOSED_TP            💚 $+0.40
+  09:00:00 #389  SELL steps=1  CLOSED_TP            💚 $+11.34
+  10:15:00 #390  BUY  steps=1  CLOSED_TP            💚 $+14.46
+  10:40:00 #391  SELL steps=1  CLOSED_TP            💚 $+0.60
+  10:45:00 #392  BUY  steps=1  CLOSED_TP            💚 $+17.27
+  11:20:00 #393  BUY  steps=1  CLOSED_LOSS_CAP      💔 $-107.36
+  12:45:00 #394  SELL steps=1  CLOSED_TP            💚 $+0.40
+
+  ➡️  รวม 24 ชม.: $+105.25  (28 series)
+
+================================================================================
+💀 WORST 10 SERIES — series ที่กินกำไรเยอะสุด
+================================================================================
+  2026-05-07 05:30  #358  SELL steps=1  69min    CLOSED_MAX_STEPS          $-168.85
+  2026-05-08 11:20  #393  BUY  steps=1  52min    CLOSED_LOSS_CAP           $-107.36
+  2026-04-23 14:10  #45   SELL steps=1  737min   CLOSED_EQUITY_STOP        $-94.75
+  2026-05-04 16:10  #276  SELL steps=1  134min   CLOSED_MAX_STEPS          $-51.42
+  2026-04-23 08:30  #40   BUY  steps=1  45min    CLOSED_MAX_STEPS          $-36.24
+  2026-04-28 12:05  #143  SELL steps=1  47min    CLOSED_MAX_STEPS          $-30.60
+  2026-04-28 12:55  #144  BUY  steps=1  48min    CLOSED_MAX_STEPS          $-29.86
+  2026-04-23 12:40  #44   BUY  steps=1  71min    CLOSED_MAX_STEPS          $-29.82
+  2026-04-29 14:20  #175  SELL steps=1  77min    CLOSED_MAX_STEPS          $-29.06
+  2026-04-28 13:50  #146  BUY  steps=1  71min    CLOSED_MAX_STEPS          $-28.71
+
+================================================================================
+🔬 ZOOM IN: worst series #358 (SELL, -168.85)
+================================================================================
+  step1  PRIMARY  05:30:00  SELL conf=60.13% lot=0.030  atr=3.19  spread=13p  → LOSS   $-13.02
+  step2  RECOVERY 05:40:00  BUY conf=62.29% lot=0.050  atr=3.81  spread=13p  → WIN    $+1.00
+  step2  RECOVERY 06:05:00  SELL conf=66.47% lot=0.040  atr=3.94  spread=12p  → LOSS   $-19.24
+  step3  RECOVERY 06:20:00  SELL conf=59.76% lot=0.100  atr=3.95  spread=13p  → LOSS   $-47.60
+  step4  RECOVERY 06:30:00  SELL conf=64.24% lot=0.090  atr=4.25  spread=13p  → LOSS   $-46.17
+  step5  RECOVERY 06:35:00  SELL conf=55.01% lot=0.070  atr=5.31  spread=13p  → LOSS   $-43.82
+
+================================================================================
+🕐 BLOW-UP HOURS: ชั่วโมงที่เกิด series เสียหนักบ่อย
+================================================================================
+  Hour UTC   BKK    Series   Blowups    Total        Avg/series  
+  --------------------------------------------------------------------
+  05:00 UTC  12:00  36       4          $ -153.78  $-4.27
+  14:00 UTC  21:00  10       3          $ -100.57  $-10.06
+  11:00 UTC  18:00  25       6          $  -63.37  $-2.53
+  08:00 UTC  15:00  17       4          $  -19.62  $-1.15
+  00:00 UTC  07:00  24       5          $  -18.76  $-0.78
+  20:00 UTC  03:00  8        2          $  -15.72  $-1.96
+  12:00 UTC  19:00  20       4          $  -15.03  $-0.75
+  18:00 UTC  01:00  10       2          $   -2.91  $-0.29
+
+================================================================================
+⚡ ATR / Spread ตอน blow-up — มี outlier ไหม?
+================================================================================
+  ATR ของ PRIMARY ใน blow-up series:
+    avg ATR  = 8.429 (min=3.192 max=13.812)
+    avg spread = 12.5p
+    avg confidence = 59.0%
+
+================================================================================
+💸 วันนี้ทำได้เท่าไหร่ vs เสียเท่าไหร่
+================================================================================
+  วันนี้ (2026-05-08):
+    Trades: 38 (WIN 26 / LOSS 12, WR=68.4%)
+    Gross WIN  : $+277.05
+    Gross LOSS : $-240.37
+    NET        : $+36.68
+    Profit Factor: 1.15
