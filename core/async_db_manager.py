@@ -113,6 +113,35 @@ class AsyncDBManager:
     def _init_schema(self) -> None:
         with self._conn() as c:
             c.executescript(SCHEMA)
+        self._migrate_add_columns()
+
+    def _migrate_add_columns(self) -> None:
+        """Idempotent column adds — older DBs upgrade without losing data."""
+        with self._conn() as c:
+            cols = {r[1] for r in c.execute("PRAGMA table_info(decisions)").fetchall()}
+            if "config_snapshot_id" not in cols:
+                c.execute("ALTER TABLE decisions ADD COLUMN config_snapshot_id INTEGER")
+                log.info("[migrate] added decisions.config_snapshot_id")
+            # config_snapshots table for performance-weighted training
+            c.executescript("""
+                CREATE TABLE IF NOT EXISTS config_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts_utc TEXT NOT NULL,
+                    label TEXT,
+                    config_hash TEXT NOT NULL,
+                    risk_per_trade_pct REAL,
+                    sl_atr_mult REAL,
+                    tp_atr_mult REAL,
+                    smart_trailing_enabled INTEGER,
+                    be_trigger_atr REAL,
+                    series_loss_cap_pct REAL,
+                    series_loss_cap_action TEXT,
+                    hourly_lot_mult_enabled INTEGER,
+                    full_config_json TEXT
+                );
+                CREATE INDEX IF NOT EXISTS ix_config_ts ON config_snapshots(ts_utc);
+                CREATE INDEX IF NOT EXISTS ix_dec_snap ON decisions(config_snapshot_id);
+            """)
 
     # ---------------- worker
     def _run_worker(self) -> None:

@@ -756,11 +756,19 @@ class HyperBot:
         step = self.recovery.consecutive_losses + 1
         role = "PRIMARY" if self.recovery.consecutive_losses == 0 else "RECOVERY"
 
+        # 🆕 Tag with current config snapshot — for performance-weighted retrain later
+        try:
+            from .config_snapshot import get_current_snapshot_id
+            snap_id = get_current_snapshot_id()
+        except Exception:
+            snap_id = None
+
         decision_id = self.db.insert_decision(
             series_id=sid, step=step, role=role,
             symbol=self.symbol, timeframe=self.timeframe,
             prediction=(2 if side == "BUY" else 0), confidence=conf,
             spread_points=cur_spread, atr=atr_value, volume=lot, status="PENDING",
+            config_snapshot_id=snap_id,
         )
 
         sl_mult = float(self.cfg_t.get("sl_atr_mult", 1.0))

@@ -46,7 +46,7 @@ def _load_real_trade_outcomes(symbol: str) -> "Optional[object]":
             return None
         with sqlite3.connect(str(path)) as conn:
             df = pd.read_sql_query(
-                "SELECT ts_utc, prediction, status FROM decisions "
+                "SELECT ts_utc, prediction, status, config_snapshot_id FROM decisions "
                 "WHERE symbol=? AND status IN ('WIN','LOSS') "
                 "ORDER BY ts_utc",
                 conn, params=(symbol,),
@@ -56,7 +56,7 @@ def _load_real_trade_outcomes(symbol: str) -> "Optional[object]":
         df["time"] = pd.to_datetime(df["ts_utc"], utc=True, errors="coerce")
         df = df.dropna(subset=["time"])
         df = df.rename(columns={"prediction": "side", "status": "outcome"})
-        return df[["time", "side", "outcome"]]
+        return df[["time", "side", "outcome", "config_snapshot_id"]]
     except Exception as e:
         log.warning("Trade-aug: failed to load DB outcomes: %s", e)
         return None
@@ -64,10 +64,14 @@ def _load_real_trade_outcomes(symbol: str) -> "Optional[object]":
 
 def _apply_trade_augmentation(X_part, y_part, sw_part, real_df,
                               win_weight: float, loss_weight: float,
-                              loss_mode="flip", tolerance_min: int = 5):
+                              loss_mode="flip", tolerance_min: int = 5,
+                              snapshot_scores=None):
     """
     🆕 Apply trade-aug: match real trade timestamps to bars in X_part,
     boost their sample weights, optionally relabel LOSSes.
+
+    🆕 v2: ถ้ามี snapshot_scores → คูณ weight ด้วย strategy quality score
+           ของ snapshot ที่ trade นั้นเกิด (formula-driven, not hardcoded)
 
     loss_mode (str or bool, backward-compatible):
       - "flip"          : LOSS BUY (2) → SELL (0), LOSS SELL (0) → BUY (2)  ✨ recommended
@@ -108,10 +112,18 @@ def _apply_trade_augmentation(X_part, y_part, sw_part, real_df,
     matched_pos = pos[valid]
     matched_outcome = sub["outcome"].values[valid]
     matched_side = sub["side"].values[valid]   # 0=SELL, 2=BUY
+    matched_snap = sub["config_snapshot_id"].values[valid] if "config_snapshot_id" in sub.columns else [None] * len(matched_pos)
 
-    for p, outcome, side in zip(matched_pos, matched_outcome, matched_side):
+    for p, outcome, side, snap_id in zip(matched_pos, matched_outcome, matched_side, matched_snap):
+        # 🆕 strategy-weight multiplier (formula-based score; default 1.0 if no data)
+        sw_mult = 1.0
+        if snapshot_scores and snap_id is not None:
+            entry = snapshot_scores.get(int(snap_id))
+            if entry:
+                sw_mult = float(entry.get("weight_mult", 1.0))
+
         if outcome == "LOSS":
-            sw_arr[p] = sw_arr[p] * float(loss_weight)
+            sw_arr[p] = sw_arr[p] * float(loss_weight) * sw_mult
             if mode == "flip":
                 # BUY loss → SELL ; SELL loss → BUY ; HOLD untouched
                 side_i = int(side)
@@ -125,7 +137,7 @@ def _apply_trade_augmentation(X_part, y_part, sw_part, real_df,
                     n_relabeled += 1
             # "none" → just weight boost
         elif outcome == "WIN":
-            sw_arr[p] = sw_arr[p] * float(win_weight)
+            sw_arr[p] = sw_arr[p] * float(win_weight) * sw_mult
         n_matched += 1
 
     return y_arr, sw_arr, n_matched, n_relabeled
@@ -208,10 +220,23 @@ def train_from_mt5(symbol: Optional[str] = None,
         else:
             log.info("Trade-aug: %d real trades loaded (win_w=%.1f loss_w=%.1f loss_mode=%s)",
                      len(real_outcomes), win_w_g, loss_w_g, loss_mode_g)
+            # 🆕 Compute strategy quality scores per snapshot (formula-driven)
+            try:
+                from .strategy_weights import compute_snapshot_scores, report_scores
+                snapshot_scores = compute_snapshot_scores()
+                if snapshot_scores:
+                    log.info("Strategy-weighted aug ENABLED — per-snapshot multipliers:\n%s",
+                             report_scores())
+                else:
+                    snapshot_scores = None
+            except Exception as e:
+                log.warning("strategy_weights failed: %s — fallback to flat weights", e)
+                snapshot_scores = None
             # Relabel on FULL y first (placeholder sw, we recompute per-partition below)
             sw_placeholder = np.ones(len(y), dtype=float)
             y_full_arr, _, n_match_full, n_rel_full = _apply_trade_augmentation(
-                X, y, sw_placeholder, real_outcomes, win_w_g, loss_w_g, loss_mode_g)
+                X, y, sw_placeholder, real_outcomes, win_w_g, loss_w_g, loss_mode_g,
+                snapshot_scores=snapshot_scores)
             log.info("Trade-aug (full): matched %d bars, relabeled %d losses",
                      n_match_full, n_rel_full)
             # Replace y with relabeled version (preserve original index)
@@ -242,8 +267,14 @@ def train_from_mt5(symbol: Optional[str] = None,
         win_w = float(ta_cfg.get("win_weight", 2.0))
         loss_w = float(ta_cfg.get("loss_weight", 3.0))
         loss_mode = ta_cfg.get("loss_mode", ta_cfg.get("relabel_loss_to_hold", "flip"))
+        # Re-use snapshot_scores from full pass if computed
+        try:
+            snapshot_scores
+        except NameError:
+            snapshot_scores = None
         y_tr_arr, sw_tr, n_match, n_rel = _apply_trade_augmentation(
-            X_tr, y_tr, sw_tr, real_outcomes, win_w, loss_w, loss_mode)
+            X_tr, y_tr, sw_tr, real_outcomes, win_w, loss_w, loss_mode,
+            snapshot_scores=snapshot_scores)
         log.info("Trade-aug (train partition): matched %d bars, weight-boosted (%d also relabeled in train)",
                  n_match, n_rel)
 
