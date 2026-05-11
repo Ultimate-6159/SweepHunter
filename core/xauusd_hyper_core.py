@@ -431,9 +431,15 @@ class HyperBot:
                     (self.recovery.cumulative_loss_usd, self.recovery.consecutive_losses)
                     if self.recovery.consecutive_losses > 0 else "✅ ไม่ค้าง")
         if pred == 1 or conf < thr:
-            log.info("⏸️  %s | AI=%s %.1f%% < ขั้นต่ำ %.1f%% → ข้าม | %s | atr=%.3f spread=%.0fp",
-                     bar_dt.strftime("%H:%M"), CLASS_NAMES[pred], conf*100, thr*100,
-                     debt_str, atr_value, cur_spread)
+            if pred == 1:
+                # 🤚 AI ตัดสินใจ HOLD — ตลาดไม่มีสัญญาณชัด (อาจ confidence สูงก็ได้)
+                log.info("⏸️  %s | AI=HOLD %.1f%% (รอจังหวะ ไม่มีสัญญาณชัด) → ข้าม | %s | atr=%.3f spread=%.0fp",
+                         bar_dt.strftime("%H:%M"), conf*100, debt_str, atr_value, cur_spread)
+            else:
+                # 📉 AI predict BUY/SELL แต่มั่นใจไม่พอ
+                log.info("⏸️  %s | AI=%s %.1f%% < ขั้นต่ำ %.1f%% → ข้าม | %s | atr=%.3f spread=%.0fp",
+                         bar_dt.strftime("%H:%M"), CLASS_NAMES[pred], conf*100, thr*100,
+                         debt_str, atr_value, cur_spread)
             return
         log.info("🎯 %s | AI=%s %.1f%% ≥ %.1f%% → จะเทรด | %s | atr=%.3f spread=%.0fp",
                  bar_dt.strftime("%H:%M"), CLASS_NAMES[pred], conf*100, thr*100,
