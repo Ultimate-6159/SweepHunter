@@ -565,8 +565,19 @@ class HyperBot:
         if lot <= 0:
             log.warning("Computed lot <= 0, skip")
             return
+        base_lot = lot
         # 🆕 Hourly lot multiplier — เพิ่ม lot ในชั่วโมงดี ลดในชั่วโมงแย่
         lot = self._apply_hourly_lot_multiplier(lot, spec)
+        # 🆕 Confidence-tier lot multiplier — บูสต์ตอน AI มั่นใจสูง
+        lot = self._apply_confidence_lot_multiplier(lot, spec, conf)
+        # safety: clamp อย่าให้เกิน max_total_multiplier × base_lot
+        cfg_cm = Config.section("confidence_lot_multiplier") or {}
+        max_total = float(cfg_cm.get("max_total_multiplier", 2.0))
+        lot_cap = round(base_lot * max_total, 2)
+        if lot > lot_cap and base_lot > 0:
+            log.info("🛡️  Lot cap: %.2f → %.2f (× %.2f base %.2f)",
+                     lot, lot_cap, max_total, base_lot)
+            lot = lot_cap
         if lot <= 0:
             return
         self._open_trade(side, conf, atr_value, cur_spread, lot)
@@ -604,6 +615,38 @@ class HyperBot:
         emoji = "🚀" if mult > 1.2 else ("🐢" if mult < 0.8 else "➖")
         log.info("%s Hourly mult: hour=%02d UTC × %.2f → lot %.2f → %.2f",
                  emoji, h, mult, lot, new_lot)
+        return new_lot
+
+    # 🆕 Confidence-Tier Lot Multiplier — บูสต์ lot ตอน AI มั่นใจสูง
+    def _apply_confidence_lot_multiplier(self, lot: float, spec, conf: float) -> float:
+        """
+        ปรับ lot ตามระดับความมั่นใจ AI:
+          - Tiered: หา min_conf สูงสุดที่ conf ผ่าน → ใช้ mult ของ tier นั้น
+          - Disable ตอน recovery (เพื่อไม่ให้ recovery lot ระเบิดซ้ำ)
+        Config: confidence_lot_multiplier.{enabled, disable_during_recovery, tiers}
+        """
+        cfg = Config.section("confidence_lot_multiplier") or {}
+        if not cfg.get("enabled", False):
+            return lot
+        # 🛡️ ตอน recovery — ใช้ lot ตาม Recovery Engine ตรงๆ
+        if cfg.get("disable_during_recovery", True) and self.recovery.consecutive_losses > 0:
+            return lot
+        tiers = cfg.get("tiers") or []
+        if not tiers:
+            return lot
+        # หา tier สูงสุดที่ conf ผ่าน
+        mult = 1.0
+        matched = None
+        for t in sorted(tiers, key=lambda x: float(x.get("min_conf", 0))):
+            if conf >= float(t.get("min_conf", 0)):
+                mult = float(t.get("mult", 1.0))
+                matched = t
+        if abs(mult - 1.0) < 1e-6:
+            return lot
+        new_lot = round(lot * mult, 2)
+        emoji = "🔥" if mult >= 1.5 else "⚡"
+        log.info("%s Conf-tier mult: conf=%.1f%% × %.2f → lot %.2f → %.2f",
+                 emoji, conf*100, mult, lot, new_lot)
         return new_lot
 
     # ============================================================ lot calc
