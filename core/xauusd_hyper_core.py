@@ -576,6 +576,10 @@ class HyperBot:
         """
         if not self.cfg_hl.get("enabled", False):
             return lot
+        # 🛡️ FIX: ห้ามคูณ lot ตอน recovery — recovery floors คำนวณไว้แล้วให้พอกู้
+        # ถ้าคูณซ้ำจะทำให้ lot ใหญ่เกินกฎ Loss Cap → ระเบิดได้
+        if self.cfg_hl.get("disable_during_recovery", True) and self.recovery.consecutive_losses > 0:
+            return lot
         from datetime import datetime, timezone
         h = datetime.now(timezone.utc).hour
         mults = self.cfg_hl.get("multipliers", {}) or {}
