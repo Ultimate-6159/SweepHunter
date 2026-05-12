@@ -422,16 +422,27 @@ class HyperBot:
         # 🆕 Per-direction confidence override (anti-bias)
         # ถ้า model มี directional bias (เช่น BUY แม่นน้อยกว่า SELL) → ตั้ง threshold คนละค่า
         dir_thr_cfg = self.cfg_h.get("directional_threshold", {})
+        max_thr = None  # 🆕 upper bound (skip overfit zone)
         if dir_thr_cfg.get("enabled", False):
             if side == "BUY":
                 thr = float(dir_thr_cfg.get("buy", thr))
+                if "buy_max" in dir_thr_cfg:
+                    max_thr = float(dir_thr_cfg["buy_max"])
             elif side == "SELL":
                 thr = float(dir_thr_cfg.get("sell", thr))
+                if "sell_max" in dir_thr_cfg:
+                    max_thr = float(dir_thr_cfg["sell_max"])
 
         bar_dt = datetime.fromtimestamp(bar_time, tz=timezone.utc)
         debt_str = ("💳 ค้าง $%.2f (เสียติด %d ไม้)" %
                     (self.recovery.cumulative_loss_usd, self.recovery.consecutive_losses)
                     if self.recovery.consecutive_losses > 0 else "✅ ไม่ค้าง")
+        # 🆕 max threshold check — skip overconfident overfit zone
+        if pred != 1 and max_thr is not None and conf > max_thr:
+            log.info("⏸️  %s | AI=%s %.1f%% > เพดาน %.1f%% (overfit zone) → ข้าม | %s | atr=%.3f spread=%.0fp",
+                     bar_dt.strftime("%H:%M"), CLASS_NAMES[pred], conf*100, max_thr*100,
+                     debt_str, atr_value, cur_spread)
+            return
         if pred == 1 or conf < thr:
             if pred == 1:
                 # 🤚 AI ตัดสินใจ HOLD — ตลาดไม่มีสัญญาณชัด (อาจ confidence สูงก็ได้)
