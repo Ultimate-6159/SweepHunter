@@ -422,6 +422,16 @@ def train_from_mt5(symbol: Optional[str] = None,
 
     joblib.dump({"model": final, "features": FEATURE_COLUMNS}, out)
 
+    # 🗃️ บันทึก retrain event ลง DB — แยกได้ชัดว่า trades ไหน pre/post retrain
+    try:
+        from .retrain_log import log_retrain
+        log_retrain(model_path=out, rows=int(n),
+                    cv_acc=float(np.mean(cv_accs)),
+                    oos_acc=float(test_acc), accepted=True,
+                    notes=f"cv={float(np.mean(cv_accs)):.4f} oos={float(test_acc):.4f}")
+    except Exception as e:
+        log.warning("could not log retrain event: %s", e)
+
     meta = {
         "symbol": symbol,
         "timeframe": timeframe,

@@ -53,6 +53,12 @@ def cmd_status(args):
     if not DB_PATH.exists():
         print(f"❌ DB not found: {DB_PATH}")
         return 1
+    # ensure schema (notes column + retrain table)
+    try:
+        from core.retrain_log import ensure_schema
+        ensure_schema()
+    except Exception:
+        pass
     c = sqlite3.connect(str(DB_PATH))
     c.row_factory = sqlite3.Row
 
@@ -100,6 +106,7 @@ def cmd_status(args):
         SELECT cs.id, cs.ts_utc, cs.label, cs.config_hash,
                cs.risk_per_trade_pct, cs.smart_trailing_enabled,
                cs.series_loss_cap_action, cs.hourly_lot_mult_enabled,
+               COALESCE(cs.notes, '') as notes,
                (SELECT COUNT(*) FROM decisions d WHERE d.config_snapshot_id=cs.id AND d.status IN ('WIN','LOSS')) as n,
                (SELECT SUM(CASE WHEN d.status='WIN' THEN 1 ELSE 0 END) FROM decisions d WHERE d.config_snapshot_id=cs.id) as w,
                (SELECT COALESCE(SUM(d.pnl),0) FROM decisions d WHERE d.config_snapshot_id=cs.id AND d.status IN ('WIN','LOSS')) as net,
@@ -132,6 +139,8 @@ def cmd_status(args):
         marker = "▶" if r['id'] == snaps[0]['id'] else " "
         label_short = (r['label'] or "?")[:50]
         print(f"{marker}#{r['id']:<3} {fmt_time(r['ts_utc']):<19} {age:<10} {n:<8} {wr:<5.0f}% ${r['net']:<+8.2f} ${pertr:<+6.2f}  {label_short} {flag}")
+        if r['notes']:
+            print(f"     📝 {r['notes']}")
 
     # ---------- CURRENT ERA STATS ----------
     print("\n" + "=" * 90)
@@ -176,19 +185,72 @@ def cmd_status(args):
     small = [r for r in rows if 0 < (r['n'] or 0) < 20]
     if small:
         print(f"  ⏳ Sample too small (<20):          {', '.join('#'+str(r['id']) for r in small)}")
-    print("\n  📌 สำหรับ retrain — ควรใช้:")
-    print("     1. Trades ทั้งหมด (sample size สำคัญ)")
-    print("     2. แต่ weight สูงให้ snapshot ที่ profitable (strategy_weights)")
-    print("     3. ตอนนี้ strategy_weights = OFF (formula bug — รอแก้)")
+
+    # ---------- MODEL RETRAIN TIMELINE ----------
+    try:
+        from core.retrain_log import get_retrains, ensure_schema
+        ensure_schema()
+        retrains = get_retrains(limit=10)
+        if retrains:
+            print("\n" + "=" * 90)
+            print("🗃️  MODEL RETRAIN HISTORY (latest 10)")
+            print("=" * 90)
+            print(f"  {'ID':<4} {'When':<19} {'Age':<10} {'Hash':<18} {'OOS':<7} {'Rows':<8} Notes")
+            for r in retrains:
+                acc_em = "✅" if r['accepted'] else "❌"
+                age = relative_age(r['ts_utc'])
+                print(f"  #{r['id']:<3} {fmt_time(r['ts_utc']):<19} {age:<10} "
+                      f"{(r['model_hash'] or '?'):<18} {r['oos_acc']:<6.4f} {r['rows_trained']:<8} {acc_em} {r['notes'] or ''}")
+    except Exception as e:
+        pass
+
+    print("\n  📌 หลัง retrain → trades ใหม่ใช้ model ใหม่ → แยก 'data era' ตาม retrain id ได้")
     return 0
 
 
 def main():
     ap = argparse.ArgumentParser(description="Data Lineage Dashboard")
-    ap.add_argument("--from", dest="from_id", type=int, help="Start from snapshot id")
-    ap.add_argument("--since", help="Time window e.g. 7d, 24h")
+    sub = ap.add_subparsers(dest="cmd")
+
+    p_status = sub.add_parser("status", help="Show full timeline (default)")
+    p_status.add_argument("--from", dest="from_id", type=int, help="Start from snapshot id")
+    p_status.add_argument("--since", help="Time window e.g. 7d, 24h")
+
+    p_note = sub.add_parser("note", help="Set notes on a snapshot")
+    p_note.add_argument("snapshot_id", type=int)
+    p_note.add_argument("text", help="Notes text (quote it)")
+
+    p_retr = sub.add_parser("retrains", help="List model retrain events")
+    p_retr.add_argument("--limit", type=int, default=20)
+
+    # default = status
     args = ap.parse_args()
-    sys.exit(cmd_status(args))
+    if args.cmd is None:
+        # parse as status
+        args = ap.parse_args(["status"] + sys.argv[1:])
+
+    if args.cmd == "status":
+        sys.exit(cmd_status(args))
+    elif args.cmd == "note":
+        from core.retrain_log import set_snapshot_notes
+        ok = set_snapshot_notes(args.snapshot_id, args.text)
+        if ok:
+            print(f"✅ Snapshot #{args.snapshot_id} notes updated.")
+        else:
+            print(f"❌ Snapshot #{args.snapshot_id} not found.")
+        sys.exit(0 if ok else 1)
+    elif args.cmd == "retrains":
+        from core.retrain_log import get_retrains, ensure_schema
+        ensure_schema()
+        rows = get_retrains(args.limit)
+        print(f"\n🗃️  MODEL RETRAIN LOG (latest {len(rows)})")
+        print("-" * 90)
+        print(f"  {'ID':<4} {'When':<19} {'Hash':<18} {'Rows':<8} {'CV':<7} {'OOS':<7} {'Acc':<5} Notes")
+        for r in rows:
+            acc = "✅" if r['accepted'] else "❌"
+            print(f"  #{r['id']:<3} {fmt_time(r['ts_utc']):<19} {r['model_hash'] or '?':<18} "
+                  f"{r['rows_trained']:<8} {r['cv_acc']:<6.4f} {r['oos_acc']:<6.4f} {acc:<5} {r['notes'] or ''}")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
