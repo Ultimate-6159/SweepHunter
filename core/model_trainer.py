@@ -118,9 +118,16 @@ def _apply_trade_augmentation(X_part, y_part, sw_part, real_df,
         # 🆕 strategy-weight multiplier (formula-based score; default 1.0 if no data)
         sw_mult = 1.0
         if snapshot_scores and snap_id is not None:
-            entry = snapshot_scores.get(int(snap_id))
-            if entry:
-                sw_mult = float(entry.get("weight_mult", 1.0))
+            try:
+                # ป้องกัน NaN crash — trades เก่าไม่มี snap_id
+                if isinstance(snap_id, float) and snap_id != snap_id:  # NaN check
+                    pass
+                else:
+                    entry = snapshot_scores.get(int(snap_id))
+                    if entry:
+                        sw_mult = float(entry.get("weight_mult", 1.0))
+            except (ValueError, TypeError):
+                pass
 
         if outcome == "LOSS":
             sw_arr[p] = sw_arr[p] * float(loss_weight) * sw_mult
