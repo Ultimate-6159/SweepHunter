@@ -57,6 +57,58 @@ def _extract_key_fields(cfg: dict) -> dict:
     }
 
 
+def _build_diff_label(prev_fields: Optional[dict], new_fields: dict, full_cfg: dict) -> str:
+    """
+    สร้าง label ที่บอกชัดว่า "อะไรเปลี่ยนจากเก่า" — มีประโยชน์มากกว่า "auto-detected".
+    Example: "auto: trail 1→0 | risk 1.0→1.25 | conf 0.55→0.65"
+    """
+    if not prev_fields:
+        return "auto: initial config snapshot"
+    changes = []
+    label_map = {
+        "risk_per_trade_pct": "risk",
+        "sl_atr_mult": "sl",
+        "tp_atr_mult": "tp",
+        "smart_trailing_enabled": "trail",
+        "be_trigger_atr": "trigger",
+        "series_loss_cap_pct": "loss_cap",
+        "series_loss_cap_action": "cap_act",
+        "hourly_lot_mult_enabled": "hmul",
+    }
+    for key, short in label_map.items():
+        old = prev_fields.get(key)
+        new = new_fields.get(key)
+        if old != new:
+            changes.append(f"{short} {old}→{new}")
+    # Also detect deeper changes that aren't in the key fields
+    extras = _detect_extra_changes(full_cfg)
+    if extras:
+        changes.extend(extras)
+    if not changes:
+        return "auto: config saved (no key changes)"
+    return "auto: " + " | ".join(changes[:5])  # cap at 5 items
+
+
+def _detect_extra_changes(cfg: dict) -> list:
+    """ตรวจ key fields นอกเหนือจาก _extract_key_fields ที่สำคัญ"""
+    out = []
+    h = cfg.get("hyper_frequency", {})
+    if "min_confidence" in h:
+        out.append(f"min_conf={h['min_confidence']}")
+    dt = h.get("directional_threshold", {})
+    if dt.get("enabled"):
+        b = dt.get("buy"); s_ = dt.get("sell")
+        bm = dt.get("buy_max"); sm = dt.get("sell_max")
+        out.append(f"BUY[{b}-{bm or '?'}] SELL[{s_}-{sm or '?'}]")
+    rec = cfg.get("recovery", {})
+    if "enabled" in rec:
+        out.append(f"recov={'ON' if rec['enabled'] else 'OFF'}")
+    rgm = cfg.get("regime_filter", {})
+    if rgm.get("enabled"):
+        out.append("regime=ON")
+    return out
+
+
 def _db_path() -> Path:
     from .config import Config
     fname = Config.section("database").get("filename", "hyper_trades.sqlite")
@@ -93,6 +145,20 @@ def get_current_snapshot_id(force_refresh: bool = False) -> Optional[int]:
                     sid = int(row[0])
                 else:
                     fields = _extract_key_fields(cfg)
+                    # ดึง snapshot ก่อนหน้า → สร้าง diff label
+                    prev = conn.execute("""
+                        SELECT risk_per_trade_pct, sl_atr_mult, tp_atr_mult,
+                               smart_trailing_enabled, be_trigger_atr,
+                               series_loss_cap_pct, series_loss_cap_action,
+                               hourly_lot_mult_enabled
+                        FROM config_snapshots ORDER BY id DESC LIMIT 1
+                    """).fetchone()
+                    prev_dict = {k: prev[i] for i, k in enumerate([
+                        "risk_per_trade_pct","sl_atr_mult","tp_atr_mult",
+                        "smart_trailing_enabled","be_trigger_atr",
+                        "series_loss_cap_pct","series_loss_cap_action",
+                        "hourly_lot_mult_enabled"])} if prev else None
+                    auto_label = _build_diff_label(prev_dict, fields, cfg)
                     cur = conn.execute("""
                         INSERT INTO config_snapshots
                           (ts_utc, label, config_hash,
@@ -103,7 +169,7 @@ def get_current_snapshot_id(force_refresh: bool = False) -> Optional[int]:
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         datetime.now(timezone.utc).isoformat(),
-                        "auto-detected on config change", cur_hash,
+                        auto_label, cur_hash,
                         fields["risk_per_trade_pct"], fields["sl_atr_mult"],
                         fields["tp_atr_mult"], fields["smart_trailing_enabled"],
                         fields["be_trigger_atr"], fields["series_loss_cap_pct"],
@@ -112,7 +178,8 @@ def get_current_snapshot_id(force_refresh: bool = False) -> Optional[int]:
                     ))
                     sid = int(cur.lastrowid)
                     conn.commit()
-                    log.info("[snapshot] 🆕 NEW config snapshot id=%d hash=%s", sid, cur_hash)
+                    log.info("[snapshot] 🆕 NEW snapshot id=%d hash=%s | %s",
+                             sid, cur_hash, auto_label)
 
             _CACHED_ID = sid
             _CACHED_HASH = cur_hash

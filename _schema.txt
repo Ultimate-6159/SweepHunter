@@ -1,0 +1,72 @@
+================================================================================
+SCHEMA: config_snapshots
+================================================================================
+  id                             INTEGER
+  ts_utc                         TEXT
+  label                          TEXT
+  config_hash                    TEXT
+  risk_per_trade_pct             REAL
+  sl_atr_mult                    REAL
+  tp_atr_mult                    REAL
+  smart_trailing_enabled         INTEGER
+  be_trigger_atr                 REAL
+  series_loss_cap_pct            REAL
+  series_loss_cap_action         TEXT
+  hourly_lot_mult_enabled        INTEGER
+  full_config_json               TEXT
+
+================================================================================
+SCHEMA: decisions (relevant cols)
+================================================================================
+  id                             INTEGER
+  ts_utc                         TEXT
+  prediction                     INTEGER
+  confidence                     REAL
+  role                           TEXT
+  status                         TEXT
+  pnl                            REAL
+  config_snapshot_id             INTEGER
+
+================================================================================
+CURRENT SNAPSHOTS (full)
+================================================================================
+
+  #1 2026-05-09T04:02:30 hash=3fe937b63663a080
+     label: BE-Trail back ON (trigger 0.8 ATR) + 1.5pct risk + hourly mult
+     risk=1.5% sl=1.2 tp=1.6 trail=1 trigger=0.8
+     loss_cap=8.0% action=pause_resume hmul=1
+
+  #2 2026-05-09T04:28:41 hash=4f3d9131a5baf87c
+     label: auto-detected on config change
+     risk=1.5% sl=1.2 tp=1.6 trail=1 trigger=0.8
+     loss_cap=8.0% action=pause_resume hmul=1
+
+  #3 2026-05-11T01:50:00 hash=2c7c732d9edfd0cf
+     label: auto-detected on config change
+     risk=1.5% sl=1.2 tp=1.6 trail=1 trigger=0.5
+     loss_cap=8.0% action=pause_resume hmul=1
+
+  #4 2026-05-11T14:21:25 hash=c3d3d4ba96e49383
+     label: ROLLBACK to OLD baseline (647 trades proven) — risk 1pct, cap 8pct close, no hmult
+     risk=1.0% sl=1.2 tp=1.6 trail=1 trigger=0.5
+     loss_cap=8.0% action=close hmul=0
+
+  #5 2026-05-11T14:32:24 hash=d2d5f09207efe518
+     label: A+B: risk 1.25pct + confidence-tier lot multiplier (max 2.0x cap)
+     risk=1.25% sl=1.2 tp=1.6 trail=1 trigger=0.5
+     loss_cap=8.0% action=close hmul=0
+
+  #6 2026-05-12T01:11:56 hash=9f03d7d92a9fa228
+     label: TREND-AWARE: HTF trend filter + daily DD halt 5pct + no recovery in strong trend
+     risk=1.25% sl=1.2 tp=1.6 trail=1 trigger=0.5
+     loss_cap=8.0% action=close hmul=0
+
+  #7 2026-05-12T02:29:15 hash=34f0fff187ec18b7
+     label: DEFENSIVE: conf 0.70 + NO recovery + ATR cap 1.5 + fresh model + strategy_weights OFF
+     risk=1.25% sl=1.2 tp=1.6 trail=1 trigger=0.5
+     loss_cap=8.0% action=close hmul=0
+
+  #8 2026-05-12T02:33:10 hash=e7a6ebd87c91a24f
+     label: Trail OFF — let TP run full distance (RR fix for high-ATR regime)
+     risk=1.25% sl=1.2 tp=1.6 trail=0 trigger=0.5
+     loss_cap=8.0% action=close hmul=0
