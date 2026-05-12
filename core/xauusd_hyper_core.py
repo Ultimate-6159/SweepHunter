@@ -35,6 +35,7 @@ from .config import Config
 from .logger import get_logger
 from .mt5_connector import MT5Connector
 from .news_filter import NewsFilter
+from .regime_filter import RegimeFilter
 from .async_db_manager import AsyncDBManager, WebhookBroadcaster
 from .m1_hyper_pipeline import FEATURE_COLUMNS, build_features
 from .execution import (
@@ -123,6 +124,7 @@ class HyperBot:
         self.db = AsyncDBManager()
         self.webhook = WebhookBroadcaster()
         self.news = NewsFilter()
+        self.regime = RegimeFilter()
         self.spread_tracker = DynamicSpreadTracker()
 
         self.model = None
@@ -560,11 +562,35 @@ class HyperBot:
             log.info("⏱️  รอ cooldown อีก %ds (ป้องกันเทรดถี่เกิน)", wait)
             return
 
+        # 🌊 Regime Filter — ตรวจ HTF trend + daily DD + recovery-in-trend
+        balance_for_regime = self._get_balance()
+        rgm = self.regime.evaluate(side=side, symbol=self.symbol,
+                                   balance=balance_for_regime,
+                                   in_recovery=(self.recovery.consecutive_losses > 0))
+        if not rgm.allow_entry:
+            log.warning("🌊 Regime block: %s | %s", rgm.reason, self.regime.to_log_str(rgm))
+            # ถ้าเป็น DAILY_DD → halt ทั้งวัน (ถึงเที่ยงคืน UTC)
+            if rgm.reason.startswith("DAILY_DD_HALT"):
+                tomorrow_utc = (datetime.now(timezone.utc).replace(
+                    hour=0, minute=0, second=0, microsecond=0)
+                    + timedelta(days=1))
+                self.recovery.halted_until_ts = max(
+                    self.recovery.halted_until_ts, tomorrow_utc.timestamp())
+                self._save_recovery()
+            return
+        if rgm.lot_factor < 1.0 or rgm.skip_recovery_escalation:
+            log.info("🌊 Regime modifier: %s | %s",
+                     rgm.reason, self.regime.to_log_str(rgm))
+
         # J. lot calc + open
-        lot = self._compute_lot_for_recovery(spec, atr_value)
+        lot = self._compute_lot_for_recovery(
+            spec, atr_value, skip_recovery_escalation=rgm.skip_recovery_escalation)
         if lot <= 0:
             log.warning("Computed lot <= 0, skip")
             return
+        # apply regime lot factor (weak counter-trend = 0.5×)
+        if rgm.lot_factor < 1.0:
+            lot = round(lot * rgm.lot_factor, 2)
         base_lot = lot
         # 🆕 Hourly lot multiplier — เพิ่ม lot ในชั่วโมงดี ลดในชั่วโมงแย่
         lot = self._apply_hourly_lot_multiplier(lot, spec)
@@ -727,9 +753,13 @@ class HyperBot:
         return base_lot, max_cap, balance
 
     # ============================================================ lot calc
-    def _compute_lot_for_recovery(self, spec, atr_value: float) -> float:
+    def _compute_lot_for_recovery(self, spec, atr_value: float,
+                                   skip_recovery_escalation: bool = False) -> float:
         """
         คำนวณ lot สำหรับไม้ถัดไป + รองรับการ scale ตามขนาดบัญชี ($500 - $10M).
+
+        skip_recovery_escalation=True → ใช้ base lot (ไม่ใช่ geometric/recover/volume floors)
+        ใช้โดย Regime Filter ตอนเจอ strong trend + recovery (เพื่อไม่ double-down).
 
         ขั้นตอน:
           1. หา base_lot และ cap แบบ dynamic จาก balance (account_scaling)
@@ -740,6 +770,11 @@ class HyperBot:
         base, absolute_cap, balance = self._dynamic_lot_caps(spec, atr_value)
 
         if not self.cfg_r.get("enabled", True) or self.recovery.consecutive_losses <= 0:
+            return spec.normalize_volume(base)
+
+        # 🌊 Regime override: ใน strong trend → ใช้ base lot เท่านั้น (no escalation)
+        if skip_recovery_escalation:
+            log.info("🌊 Recovery escalation SKIPPED (strong trend) → base lot %.2f", base)
             return spec.normalize_volume(base)
 
         tp_mult = float(self.cfg_t.get("tp_atr_mult", 2.0))
