@@ -580,14 +580,16 @@ class HyperBot:
                                    in_recovery=(self.recovery.consecutive_losses > 0))
         if not rgm.allow_entry:
             log.warning("🌊 Regime block: %s | %s", rgm.reason, self.regime.to_log_str(rgm))
-            # ถ้าเป็น DAILY_DD → halt ทั้งวัน (ถึงเที่ยงคืน UTC)
+            # ถ้าเป็น DAILY_DD → halt ตาม config (ดีฟอลต์ 4 ชม.) ไม่ใช่ถึงเที่ยงคืนอีกต่อไป
             if rgm.reason.startswith("DAILY_DD_HALT"):
-                tomorrow_utc = (datetime.now(timezone.utc).replace(
-                    hour=0, minute=0, second=0, microsecond=0)
-                    + timedelta(days=1))
+                cfg_dd = (Config.section("regime_filter") or {}).get("daily_drawdown", {})
+                halt_hours = float(cfg_dd.get("halt_hours_after_trip", 4.0))
+                halt_until = time.time() + halt_hours * 3600
                 self.recovery.halted_until_ts = max(
-                    self.recovery.halted_until_ts, tomorrow_utc.timestamp())
+                    self.recovery.halted_until_ts, halt_until)
                 self._save_recovery()
+                log.warning("⏸️  DD halt เปิด %.1f ชม. (ไม่รอถึงเที่ยงคืน) — ปรับ halt_hours_after_trip ได้",
+                            halt_hours)
             return
         if rgm.lot_factor < 1.0 or rgm.skip_recovery_escalation:
             log.info("🌊 Regime modifier: %s | %s",

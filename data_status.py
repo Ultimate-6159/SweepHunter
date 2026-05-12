@@ -83,6 +83,19 @@ def cmd_status(args):
         s = snaps[0]
         print(f"🟢 Active snapshot: #{s['id']}  ({relative_age(s['ts_utc'])})  {s['label'][:60]}")
 
+    # Halt status
+    try:
+        import json as _json
+        recov = _json.loads(Path("data/recovery_state.json").read_text())
+        halt_ts = float(recov.get("halted_until_ts", 0))
+        now_ts = datetime.now(timezone.utc).timestamp()
+        if halt_ts > now_ts:
+            wait = halt_ts - now_ts
+            until = datetime.fromtimestamp(halt_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            print(f"⏸️  HALTED until {until}  (wait {wait/3600:.1f}h)  → run 6_clear_halt.bat to reset")
+    except Exception:
+        pass
+
     # ---------- SNAPSHOT TIMELINE ----------
     where, params = "1=1", []
     if args.from_id:

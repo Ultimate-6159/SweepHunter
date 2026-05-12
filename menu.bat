@@ -11,22 +11,24 @@ echo   2. 📊 Data Status            (overview dashboard)
 echo   3. 🧠 Retrain AI Model       (~3 min)
 echo   4. 🗃️  Retrain History
 echo   5. 📝 Add Snapshot Note
-echo   6. 📈 Compare Strategies     (A/B snapshot test)
-echo   7. ⚡ Status (last 24h only)
-echo   8. 🛠️  Open config.json
-echo   9. 🚪 Exit
+echo   6. ⏯️  Clear Halt             (ปลดล็อก bot)
+echo   7. 📈 Compare Strategies     (A/B snapshot test)
+echo   8. ⚡ Status (last 24h only)
+echo   9. 🛠️  Open config.json
+echo   0. 🚪 Exit
 echo.
-set /p CHOICE="Choose [1-9]: "
+set /p CHOICE="Choose [0-9]: "
 
 if "%CHOICE%"=="1" (call 1_start_bot.bat & goto :eof)
 if "%CHOICE%"=="2" (call 2_status.bat & goto :menu)
 if "%CHOICE%"=="3" (call 3_retrain.bat & goto :menu)
 if "%CHOICE%"=="4" (call 4_retrain_history.bat & goto :menu)
 if "%CHOICE%"=="5" (call 5_add_note.bat & goto :menu)
-if "%CHOICE%"=="6" (python compare_strategies.py & pause & goto :menu)
-if "%CHOICE%"=="7" (python data_status.py status --since 24h & pause & goto :menu)
-if "%CHOICE%"=="8" (start notepad config.json & goto :menu)
-if "%CHOICE%"=="9" (exit /b)
+if "%CHOICE%"=="6" (call 6_clear_halt.bat & goto :menu)
+if "%CHOICE%"=="7" (python compare_strategies.py & pause & goto :menu)
+if "%CHOICE%"=="8" (python data_status.py status --since 24h & pause & goto :menu)
+if "%CHOICE%"=="9" (start notepad config.json & goto :menu)
+if "%CHOICE%"=="0" (exit /b)
 
 echo Invalid choice.
 pause
