@@ -1,8 +1,12 @@
 @echo off
 REM ============================================================
-REM  SweepHunter - Install dependencies
-REM  Portable: ใช้ path ของไฟล์นี้เป็นฐาน ไม่ขึ้นกับ working dir
+REM  SweepHunter - Install (redirects to SETUP.bat)
 REM ============================================================
+cd /d "%~dp0"
+call SETUP.bat
+exit /b %ERRORLEVEL%
+
+REM ---- legacy code below (not executed) ----
 setlocal
 cd /d "%~dp0"
 

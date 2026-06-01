@@ -114,6 +114,28 @@ class AsyncDBManager:
         with self._conn() as c:
             c.executescript(SCHEMA)
         self._migrate_add_columns()
+        self._cleanup_old_records()
+
+    def _cleanup_old_records(self, keep_days: int = 90) -> None:
+        """ลบ decisions + series เก่ากว่า keep_days วัน เพื่อป้องกัน disk full ระยะยาว"""
+        try:
+            from datetime import datetime, timezone, timedelta
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+            with self._conn() as c:
+                cur = c.execute(
+                    "DELETE FROM decisions WHERE status IN ('WIN','LOSS','ERROR') "
+                    "AND closed_at_utc IS NOT NULL AND closed_at_utc < ?", (cutoff,))
+                d_del = cur.rowcount
+                cur2 = c.execute(
+                    "DELETE FROM series WHERE status != 'OPEN' "
+                    "AND closed_at_utc IS NOT NULL AND closed_at_utc < ?", (cutoff,))
+                s_del = cur2.rowcount
+                c.execute("PRAGMA wal_checkpoint(TRUNCATE);")  # compact WAL
+            if d_del > 0 or s_del > 0:
+                log.info("🗑️ DB cleanup: ลบ %d decisions + %d series เก่ากว่า %d วัน",
+                         d_del, s_del, keep_days)
+        except Exception as e:
+            log.warning("DB cleanup error (non-fatal): %s", e)
 
     def _migrate_add_columns(self) -> None:
         """Idempotent column adds — older DBs upgrade without losing data."""

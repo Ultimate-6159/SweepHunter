@@ -80,10 +80,10 @@ Step 4: ให้รูปใหม่ → AI ทาย → "หมา 87%"
 ## 🎯 AI เทรดของเรา ทำเหมือนกัน
 
 ```
-Step 1: ป้อนแท่งเทียน 300,000 แท่ง + ป้ายว่า "ขึ้น/ลง/นิ่ง"
+Step 1: ป้อนแท่งเทียน ~100,000 แท่ง + ป้ายว่า "ขึ้น/ลง/นิ่ง"
 Step 2: AI เรียนรู้ pattern (เช่น "wick ยาวล่าง + RSI ต่ำ = ขึ้น 60%")
 Step 3: ทุก 5 นาที → ป้อนแท่งล่าสุด → AI ทาย
-Step 4: ถ้ามั่นใจ ≥ 55% → เปิดออเดอร์
+Step 4: ถ้ามั่นใจ ≥ best_threshold (ปัจจุบัน 0.58) → เปิดออเดอร์
 ```
 
 ## 📊 แต่... AI ไม่เห็น "ภาพ" — เห็นแค่ "ตัวเลข"
@@ -118,9 +118,9 @@ body_atr = (close - open) / atr   # = 0.5 (ค่าคงที่ relative)
 
 > 💡 **กฎทอง:** Feature ที่ดี = **Normalized** (ทำให้เปรียบเทียบได้)
 
-## 🎨 11 มิติ × 48 Features = ตา 48 ตา ของ AI
+## 🎨 12 มิติ × 58 Features = ตา 58 ตา ของ AI
 
-> 📌 ในบทนี้จะอธิบาย **9 มิติพื้นฐาน** ก่อน — ส่วน **มิติ S/R Levels** และ **Momentum Dynamics** (เพิ่มใน V3) ดูรายละเอียดที่ [`FEATURE_ENGINEERING_V2.md`](FEATURE_ENGINEERING_V2.md)
+> 📌 ในบทนี้จะอธิบาย **9 มิติพื้นฐาน** ก่อน — ส่วน **S/R Levels**, **Momentum Dynamics** และ **Smart-Money / Order-Flow** (10 features เพิ่มล่าสุด) ดูรายละเอียดที่ [`FEATURE_ENGINEERING_V2.md`](FEATURE_ENGINEERING_V2.md)
 
 ### 📊 มิติ 1: รูปร่างแท่งเทียน
 
@@ -274,7 +274,7 @@ proba = model.predict_proba(X)[0]   # [0.20, 0.30, 0.50]
 pred = np.argmax(proba)             # = 2 (BUY)
 conf = proba[pred]                  # = 0.50
 
-if conf >= 0.55:
+if conf >= best_threshold:          # ปัจจุบัน 0.58 (จาก model_meta.json)
     open_buy_order()
 ```
 
@@ -289,40 +289,41 @@ if conf >= 0.55:
 
 ---
 
-# 🌴 บทที่ 5: Pipeline 11 ชั้น
+# 🌴 บทที่ 5: Pipeline กรองหลายชั้น
 
-## 🚪 เปรียบเทียบ: เข้างานต้องผ่าน 11 ด่าน
+## 🚪 เปรียบเทียบ: เข้างานต้องผ่านหลายด่าน
 
 ```
 สัญญาณ AI 🤖
     ↓
-🚪 ด่าน 1: AI มั่นใจพอ? (≥ threshold)
-🚪 ด่าน 2: BUY/SELL threshold ต่างกัน?
-🚪 ด่าน 3: ทวนเทรนด์ใหญ่?
-🚪 ด่าน 4: signal ติดกัน N แท่ง?
-🚪 ด่าน 5: FOMO? (วิ่งแรงเกินไป)
-🚪 ด่าน 6: tick 60s ผ่าน? (กัน fake)
-🚪 ด่าน 7: Cooldown หมด?
-🚪 ด่าน 8: Spread ปกติ?
-🚪 ด่าน 9: ข่าว High Impact?
-🚪 ด่าน 10: Max steps?
-🚪 ด่าน 11: Equity stop?
+🚪 ด่าน 1: AI มั่นใจพอ? (≥ best_threshold = 0.58)
+🚪 ด่าน 2: FOMO/Exhaustion? (วิ่งแรงเกินไป)
+🚪 ด่าน 3: tick 45s ผ่าน? (กัน fake/stop-hunt)
+🚪 ด่าน 4: Cooldown หมด? (≥ 90s ระหว่างไม้)
+🚪 ด่าน 5: Spread ปกติ? (≤ hard_max / 2× ค่าเฉลี่ย)
+🚪 ด่าน 6: ข่าว High Impact? (±10 นาที)
+🚪 ด่าน 7: Regime OK? (ไม่ทวน strong trend)
+🚪 ด่าน 8: ATR-Spike? (ATR ≤ 1.4× ค่าเฉลี่ย)
+🚪 ด่าน 9: Direction-Flip lock? (เสียทิศเดิม 2 ไม้)
+🚪 ด่าน 10: Slot ถูก block? (วัน×ชั่วโมง broker)
     ↓
 ✅ ทุกด่านผ่าน → เปิดออเดอร์ 🚀
 ```
 
+> 📌 หมายเหตุ: per-direction threshold, trend_filter (ema_dist), equity_stop, series_loss_cap
+> ถูก **ปิด** อยู่ — ใช้ best_threshold + regime + recovery cap แทน
+
 ## 🎬 ตัวอย่างจริง
 
 ```
-🎯 14:33 | AI=BUY 64.2% ≥ 62.0%      ✅ ด่าน 1+2
-✅ Trend OK, EMA dist=+0.5            ✅ ด่าน 3
-✅ Multi-bar OK                       ✅ ด่าน 4
-✅ ไม่ FOMO (velocity=0.8)            ✅ ด่าน 5
-✅ Tick confirm: buy_ratio=0.61       ✅ ด่าน 6
-✅ Cooldown หมด                       ✅ ด่าน 7
-✅ Spread=14p ปกติ                    ✅ ด่าน 8
-✅ ไม่มีข่าว                          ✅ ด่าน 9
-✅ ไม่ใน HALT                         ✅ ด่าน 10+11
+🎯 14:33 | AI=BUY 64.2% ≥ 58.0%      ✅ ด่าน 1
+✅ ไม่ FOMO (velocity=0.8)            ✅ ด่าน 2
+✅ Tick confirm: buy_ratio=0.61       ✅ ด่าน 3
+✅ Cooldown หมด                       ✅ ด่าน 4
+✅ Spread=14p ปกติ                    ✅ ด่าน 5
+✅ ไม่มีข่าว                          ✅ ด่าน 6
+✅ Regime: ไม่ทวนเทรนด์ H1            ✅ ด่าน 7
+✅ ATR ปกติ / ไม่มี flip-lock / slot ไม่ block ✅ ด่าน 8-10
 
 🆕 เปิดไม้ #12345 BUY 0.01 lot @2050.30
 ```
@@ -348,28 +349,30 @@ if conf >= 0.55:
 ### ✅ Smart Recovery (SweepHunter)
 
 ```python
-floor_geo     = 0.01 × 1.7^step       # โตช้ากว่า Martingale
-floor_recover = (cum_loss + 3) ÷ 250  # พอกู้ทุน
-floor_volume  = sum_losing × 1.5      # safety net
+floor_geo     = 0.01 × 1.25^step          # โตช้ากว่า Martingale มาก
+floor_recover = (cum_loss + min_profit) ÷ net_per_lot   # พอกู้ทุน
+floor_volume  = sum_losing × 1.05         # safety net
 
 next_lot = max(geo, recover, volume)
-next_lot = min(next_lot, 0.08)        # CAP! 🛑
+next_lot = min(next_lot, base × 8, cap)   # CAP หลายชั้น! 🛑
 ```
+
+> 💡 ค่าจริงใน `config.json`: `lot_multiplier=1.25`, `profit_volume_multiplier=1.05`,
+> `max_recovery_lot_multiplier=8`, `max_lot_cap` คำนวณตาม balance (account_scaling)
 
 ## 🧮 ตัวอย่าง
 
 ```
-สถานการณ์: เสียไม้ 1 ที่ 0.01 lot → ขาดทุน $1.92
+สถานการณ์: เสียไม้ 1 ที่ 0.01 lot → ขาดทุน $1.20
 
-floor_geo     = 0.01 × 1.7^1 = 0.017
-floor_recover = ($1.92 + $3) / $250 = 0.020 ← ใหญ่สุด
-floor_volume  = 0.01 × 1.5 = 0.015
+floor_geo     = 0.01 × 1.25^1 = 0.013
+floor_recover = ($1.20 + $0.5) / net_per_lot ≈ 0.02 ← ใหญ่สุด
+floor_volume  = 0.01 × 1.05 = 0.011
 
-next_lot = 0.020
+next_lot ≈ 0.02
 
-ถ้าชนะ: +$5.00
-- ขาดทุนสะสม: $1.92
-- กำไรสุทธิ: $5.00 - $1.92 = $3.08 ✅
+ถ้าชนะ: กู้ทุน $1.20 + กำไรเล็กน้อย ✅
+ถ้าเสียครบ max_steps (=4): ปิด series, หนี้ที่เหลือ → global_debt (ค่อยๆ กู้)
 ```
 
 ## ⏱️ Lifecycle
@@ -413,23 +416,28 @@ WR=55%, RR=2:1
 
 ```
 ชั้น 1: SL ทันที — ไม่ปล่อยขาดทุนลอย
-ชั้น 2: max_steps — จำกัดไม้แพ้ติด
-ชั้น 3: max_lot_cap — จำกัด lot สูงสุด
-ชั้น 4: equity_stop — ปิดทุกอย่างถ้าเสียถึง %
-ชั้น 5: news_filter — หยุดก่อนข่าว
+ชั้น 2: max_steps (=4) — จำกัดไม้แพ้ติด แล้วยอมปิด series
+ชั้น 3: max_lot_cap — จำกัด lot สูงสุด (ตาม balance)
+ชั้น 4: regime_filter — ห้าม recovery ตอน strong trend / block counter-trend
+ชั้น 5: direction_flip — เสียทิศเดิม 2 ไม้ → หยุดทิศนั้น 30 นาที
+ชั้น 6: slot block + news_filter — หยุดช่วงแย่ / ก่อนข่าว
 ```
+
+> 💡 ในระบบจริง `global_equity_stop` และ `series_loss_cap` ถูก **ปิด** อยู่ —
+> ใช้ max_steps + recovery cap + slot filter คุมความเสี่ยงแทน
 
 ## 💰 Dynamic Account Scaling
 
 ```python
 base_lot = (balance × risk%) / (sl_distance × $/lot)
 
-# Balance $10k, risk 0.3%, SL=$160/lot
-# → risk_usd = $30
-# → base_lot = $30/$160 = 0.1875 lot
+# ค่าจริง: risk_per_trade_pct = 1.5%, max_lot_pct_of_balance = 10%
+# Balance $1,000, risk 1.5%, SL≈$80/lot
+# → risk_usd = $15
+# → base_lot = $15/$80 ≈ 0.18 lot (clamp ด้วย min/max ใน config)
 ```
 
-✨ **สูตรเดียว → ทำงานกับพอร์ต $500 ถึง $10M ได้!**
+✨ **สูตรเดียว → ปรับ lot ตามพอร์ตอัตโนมัติ** (เพดานปัจจุบัน max_lot_cap_absolute = 5 lot)
 
 ---
 
@@ -499,9 +507,10 @@ def _restore_recovery(self):
 
 ```python
 def _maybe_retrain(self):
-    if no_position and 500_new_trades and 4hr_passed:
-        train_from_mt5()
-        self._load_model()  # auto adapt!
+    # ค่าจริง: retrain_min_new_trades=30, retrain_check_interval_min=120
+    if no_position and enough_new_trades and interval_passed:
+        train_from_mt5()      # + Acceptance Gate (champion-beat)
+        self._load_model()    # auto adapt!
 ```
 
 ---

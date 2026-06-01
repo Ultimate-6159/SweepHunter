@@ -67,6 +67,9 @@ class RecoveryState:
     block_side_until_ts: float = 0.0
     # 🆕 Loss-cap pause-resume: นับว่า series นี้ถูก pause จาก loss cap มาแล้วกี่ครั้ง
     pause_resume_count: int = 0
+    last_loss_ts: float = 0.0
+    # 🆕 Global debt: หนี้ที่ carry over ข้าม series resets — ไม่หายแม้ max_steps/halt
+    global_debt_usd: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -75,13 +78,15 @@ class RecoveryState:
             "consecutive_losses": self.consecutive_losses,
             "series_id": self.series_id,
             "last_side": self.last_side,
-            "processed_tickets": sorted(self.processed_tickets),
+            "processed_tickets": sorted(self.processed_tickets)[-1000:],  # เก็บแค่ 1000 ล่าสุด ป้องกันไฟล์บวม
             "halted_until_ts": self.halted_until_ts,
             "last_loss_side": self.last_loss_side,
             "consec_same_dir_losses": self.consec_same_dir_losses,
             "blocked_side": self.blocked_side,
             "block_side_until_ts": self.block_side_until_ts,
             "pause_resume_count": self.pause_resume_count,
+            "last_loss_ts": self.last_loss_ts,
+            "global_debt_usd": self.global_debt_usd,
         }
 
     @classmethod
@@ -99,6 +104,8 @@ class RecoveryState:
         s.blocked_side = d.get("blocked_side")
         s.block_side_until_ts = float(d.get("block_side_until_ts", 0.0))
         s.pause_resume_count = int(d.get("pause_resume_count", 0))
+        s.last_loss_ts = float(d.get("last_loss_ts", 0.0))
+        s.global_debt_usd = float(d.get("global_debt_usd", 0.0))
         return s
 
 
@@ -116,6 +123,7 @@ class HyperBot:
         self.cfg_as = Config.section("account_scaling") or {}
         self.cfg_rf = Config.section("risk_filters") or {}
         self.cfg_hl = Config.section("hourly_lot_multiplier") or {}
+        self.cfg_wc = Config.section("weekend_close") or {}
 
         self.symbol = self.cfg_t["symbol"]
         self.timeframe = self.cfg_t.get("timeframe", "M1")
@@ -129,6 +137,7 @@ class HyperBot:
 
         self.model = None
         self.model_features = FEATURE_COLUMNS
+        self._best_threshold: float | None = None  # set by _load_model from model_meta
         self._load_model()
 
         self.recovery = RecoveryState()
@@ -142,6 +151,7 @@ class HyperBot:
         self._cached_balance: float = 0.0
         self._cached_balance_ts: float = 0.0
         self._recent_predictions: list = []   # multi-bar confirmation history
+        self._last_weekend_warn_ts: float = 0.0  # rate-limit weekend log (ทุก 5 นาที)
         # Initialise retrain counter from model timestamp so restarts don't reset it
         self._trades_at_last_train = self._count_trades_before_model()
 
@@ -180,14 +190,43 @@ class HyperBot:
             log.error("Model self-test failed: %s", e)
             self.model = None
             return False
+        # 🔑 Read best_threshold — config min_confidence overrides model_meta if set lower (user intentional)
+        meta_p = model_path(self.cfg_a.get("metadata_filename", "model_meta.json"))
+        cfg_min_conf = float(self.cfg_a.get("min_confidence", self.cfg_h.get("min_confidence", 0.58)))
+        _meta_thr = None
+        if meta_p.exists():
+            try:
+                meta = json.loads(meta_p.read_text(encoding="utf-8"))
+                saved_thr = meta.get("best_threshold")
+                if saved_thr is not None:
+                    _meta_thr = float(saved_thr)
+                    pm = meta.get("profit_metrics_oos") or {}
+                    if pm:
+                        log.info("📊 OOS metrics: net=%.2f ATRs | PF=%.2f | WR=%.1f%% | trades=%d",
+                                 pm.get("net_pnl_atrs", 0), pm.get("profit_factor", 0),
+                                 pm.get("win_rate", 0)*100, pm.get("n_trades", 0))
+            except Exception as e:
+                log.warning("Could not read best_threshold from meta: %s", e)
+        if _meta_thr is not None and cfg_min_conf < _meta_thr:
+            # Config explicitly set lower → user override
+            self._best_threshold = cfg_min_conf
+            log.info("⚙️  Threshold OVERRIDDEN by config: %.2f (model_meta=%.2f)", cfg_min_conf, _meta_thr)
+        elif _meta_thr is not None:
+            self._best_threshold = _meta_thr
+            log.info("✅ Threshold loaded from model_meta: %.2f", _meta_thr)
+        else:
+            self._best_threshold = cfg_min_conf
+            log.info("⚙️  Threshold from config: %.2f", cfg_min_conf)
         log.info("Model loaded -> %s (features=%d)", p, len(self.model_features))
         return True
 
     # ============================================================ recovery I/O
     def _save_recovery(self) -> None:
         try:
-            RECOVERY_STATE_FILE.write_text(
-                json.dumps(self.recovery.to_dict(), indent=2), encoding="utf-8")
+            data = json.dumps(self.recovery.to_dict(), indent=2)
+            tmp = RECOVERY_STATE_FILE.with_suffix(".tmp")
+            tmp.write_text(data, encoding="utf-8")
+            tmp.replace(RECOVERY_STATE_FILE)   # atomic rename — ป้องกัน corruption จาก kill/power-loss
         except Exception as e:
             log.warning("Could not save recovery state: %s", e)
 
@@ -269,13 +308,70 @@ class HyperBot:
                  rec, pos_txt)
 
     # ============================================================ session weighting
-    def _session_threshold(self, base: float, hour_utc: int) -> float:
+    _DOW_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+    def _broker_offset_hours(self) -> int:
+        return int(self.cfg_sw.get("broker_offset_hours", 3))
+
+    def _utc_to_broker_hour(self, dt: datetime) -> int:
+        """แปลง datetime (UTC-aware หรือ naive=UTC) → ชั่วโมง broker 0–23."""
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return (dt.hour + self._broker_offset_hours()) % 24
+
+    def _current_broker_hour(self) -> int:
+        return self._utc_to_broker_hour(datetime.now(timezone.utc))
+
+    def _current_broker_datetime(self) -> datetime:
+        """เวลา broker ปัจจุบัน (UTC + broker_offset) — วัน+ชั่วโมงตรง heatmap."""
+        return datetime.now(timezone.utc) + timedelta(hours=self._broker_offset_hours())
+
+    def _bar_broker_datetime(self, bar_time: int) -> datetime:
+        """เวลาเปิดแท่ง MT5 (UTC epoch) → เวลา broker (offset จาก config)."""
+        return datetime.fromtimestamp(bar_time, tz=timezone.utc) + timedelta(
+            hours=self._broker_offset_hours())
+
+    def _is_slot_blocked(self, bar_time: int) -> tuple[bool, str]:
+        """บล็อกตามวัน+ชั่วโมง broker (จากสถิติ DB) และ/หรือชั่วโมงทุกวัน."""
+        if not self.cfg_sw.get("enabled", True):
+            return False, ""
+        bd = self._bar_broker_datetime(bar_time)
+        dow, hour = bd.weekday(), bd.hour
+        dow_name = self._DOW_NAMES[dow]
+
+        for slot in self.cfg_sw.get("blocked_slots", []) or []:
+            try:
+                if int(slot.get("dow", -1)) != dow:
+                    continue
+                hours = [int(h) for h in slot.get("hours", [])]
+                if hour in hours:
+                    return True, f"{dow_name} {hour:02d}:xx (broker)"
+            except (TypeError, ValueError):
+                continue
+
+        for h in self.cfg_sw.get("blocked_hours_broker", []) or []:
+            try:
+                if hour == int(h):
+                    return True, f"hour {hour:02d} every day (broker)"
+            except (TypeError, ValueError):
+                continue
+
+        # legacy key (ค่าใน list = broker hour ถ้ามี broker_offset_hours)
+        legacy = self.cfg_sw.get("blocked_hours_utc", []) or []
+        if legacy and "blocked_slots" not in self.cfg_sw and "blocked_hours_broker" not in self.cfg_sw:
+            if hour in [int(x) for x in legacy]:
+                return True, f"hour {hour:02d} (legacy list)"
+        return False, ""
+
+    def _session_threshold(self, base: float, hour_broker: int) -> float:
         if not self.cfg_sw.get("enabled", True):
             return base
 
         def in_range(rng):
             try:
-                return int(rng[0]) <= hour_utc < int(rng[1])
+                return int(rng[0]) <= hour_broker < int(rng[1])
             except Exception:
                 return False
 
@@ -290,6 +386,48 @@ class HyperBot:
             add = float(self.cfg_sw.get("asia_threshold_add", 0.05))
         return max(0.30, min(0.95, base + add))
 
+    def _recovery_entry_block_reason(self, side: str, feat_row) -> Optional[str]:
+        """กัน recovery ซ้ำๆ โดนล่า SL ก่อนเด้ง (stop-sweep แล้วกลับ)."""
+        if self.recovery.consecutive_losses <= 0:
+            return None
+
+        min_after = float(self.cfg_r.get("min_seconds_after_loss", 0))
+        if min_after > 0 and self.recovery.last_loss_ts > 0:
+            elapsed = time.time() - self.recovery.last_loss_ts
+            if elapsed < min_after:
+                return f"รอหลังไม้เสีย {int(min_after - elapsed)}s (recovery cooldown)"
+
+        if bool(self.cfg_r.get("require_with_trend_in_recovery", False)):
+            ema_dist = float(feat_row.get("ema_dist_atr", 0.0))
+            if side == "BUY" and ema_dist < 0.05:
+                return f"BUY recovery แต่ราคายังใต้ EMA (dist={ema_dist:.2f})"
+            if side == "SELL" and ema_dist > -0.05:
+                return f"SELL recovery แต่ราคายังเหนือ EMA (dist={ema_dist:.2f})"
+
+        sweep = self.cfg_r.get("anti_sweep") or {}
+        if not sweep.get("enabled", False):
+            return None
+        vel5 = float(feat_row.get("price_velocity_5", 0.0))
+        vel2 = float(feat_row.get("price_velocity_2", 0.0))
+        if side == "BUY":
+            near_low = float(feat_row.get("near_low_5", 0.0))
+            drop_thr = float(sweep.get("min_drop_velocity_atr", 0.8))
+            low_thr = float(sweep.get("near_low_threshold", 0.85))
+            rebound = float(sweep.get("min_rebound_velocity_atr", 0.12))
+            if near_low >= low_thr and vel5 <= -drop_thr and vel2 < rebound:
+                return (f"anti-sweep BUY: ราคาแหลมลง (near_low={near_low:.0%}, vel5={vel5:.2f}) "
+                        "→ รอ rebound ก่อนเปิด")
+        elif side == "SELL":
+            near_high = float(feat_row.get("near_high_5", 0.0))
+            rise_thr = float(sweep.get("min_rise_velocity_atr", 0.8))
+            high_thr = float(sweep.get("near_high_threshold", 0.85))
+            pullback = float(sweep.get("min_pullback_velocity_atr", 0.12))
+            if near_high >= high_thr and vel5 >= rise_thr and vel2 > -pullback:
+                return (f"anti-sweep SELL: ราคาแหลมขึ้น (near_high={near_high:.0%}, vel5={vel5:.2f}) "
+                        "→ รอ pullback ก่อนเปิด")
+
+        return None
+
     # ============================================================ main loop
     def run(self) -> None:
         if not MT5Connector.initialise():
@@ -302,6 +440,14 @@ class HyperBot:
                      self.recovery.consecutive_losses, self.recovery.cumulative_loss_usd)
         else:
             log.info("💼 เริ่มสด: ไม่มีขาดทุนค้าง")
+        eq_pct = float(self.cfg_r.get("global_equity_stop_pct", 0.0))
+        rec_cap = float(self.cfg_r.get("max_recovery_lot_multiplier", 0.0))
+        if eq_pct <= 0:
+            log.info("🛡️  Equity stop: ปิด (global_equity_stop_pct=0)")
+        else:
+            log.info("🛡️  Equity stop: เปิดที่ %.1f%% ของ balance", eq_pct)
+        if rec_cap > 0:
+            log.info("🛡️  Recovery lot cap: สูงสุด %.1f× base lot", rec_cap)
 
         try:
             while True:
@@ -309,7 +455,12 @@ class HyperBot:
                     self._tick()
                 except Exception as e:
                     log.exception("loop error: %s", e)
-                time.sleep(float(self.cfg_l.get("poll_seconds", 0.5)))
+                # 🗓️ Sleep นานขึ้นเมื่อตลาดปิด weekend เพื่อประหยัด CPU
+                fc = self._friday_close_status()
+                if fc["zone"] == "weekend":
+                    time.sleep(float(self.cfg_wc.get("weekend_sleep_seconds", 60.0)))
+                else:
+                    time.sleep(float(self.cfg_l.get("poll_seconds", 0.5)))
         except KeyboardInterrupt:
             log.info("Stop requested")
         finally:
@@ -325,6 +476,7 @@ class HyperBot:
             self._update_closed_trades()
             self._manage_trailing()
             self._maybe_global_equity_stop()
+            self._maybe_close_friday_positions()   # 🗓️ ปิด position ก่อนตลาดปิดวันศุกร์
             self.webhook.maybe_send_summary(self.db)
             self._last_result_check = now
 
@@ -343,32 +495,55 @@ class HyperBot:
         if now < self.recovery.halted_until_ts:
             return
 
+        # C2. 🗓️ Friday / weekend gate (ก่อน fetch bars เพื่อประหยัด CPU)
+        _fc = self._friday_close_status()
+        if _fc["zone"] in ("no_new_entry", "force_close", "weekend"):
+            mins_left = _fc["minutes_to_close"]
+            if _fc["zone"] == "weekend":
+                # Log ทุก 5 นาทีเท่านั้น (ไม่ spam)
+                if now - self._last_weekend_warn_ts >= 300:
+                    self._last_weekend_warn_ts = now
+                    cfg_wc = Config.section("weekend_close")
+                    close_h = int(cfg_wc.get("market_close_hour_utc", 21))
+                    reopen_h = int(cfg_wc.get("market_reopen_hour_utc_monday", 22))
+                    log.info("🗓️ ตลาดปิด Weekend — บอทรอจนกว่าจะเปิดวันจันทร์ ~%02d:00 UTC "
+                             "(close %02d:00 UTC ศุกร์) | หยุด 60s/rnd", reopen_h, close_h)
+            else:
+                log.info("🗓️ Friday close zone [%s]: เหลือ %.1f นาทีก่อนตลาดปิด → หยุดเปิดออเดอร์ใหม่",
+                         _fc["zone"], mins_left)
+            return
+
         # D. New closed bar?
         bars_needed = max(int(self.cfg_t.get("history_bars_for_inference", 200)), 100)
         try:
             rates = MT5Connector.copy_rates(self.symbol, self.timeframe, bars_needed)
         except Exception as e:
-            log.debug("rates fetch failed: %s", e)
+            log.info("⚠️  rates fetch failed: %s", e)
             return
         if len(rates) < 50:
+            log.info("⚠️  ข้อมูล rates น้อยเกิน (%d bars) → ข้ามแท่ง", len(rates))
             return
         closed_idx = int(self.cfg_v.get("use_only_closed_candle_index", -2))
         bar_time = int(rates[closed_idx]["time"])
         if self._last_processed_bar == bar_time:
             return
         self._last_processed_bar = bar_time
+        log.debug("📊 แท่งใหม่ bar_time=%d → ประมวลผล", bar_time)
 
         # E. Build features
         try:
             df = build_features(rates)
             atr_value = float(df.iloc[closed_idx]["atr"])
             if not np.isfinite(atr_value) or atr_value <= 0:
+                log.info("⚠️  ATR invalid (%.4f) → ข้ามแท่ง", atr_value)
                 return
             feat_row = df.iloc[closed_idx][FEATURE_COLUMNS]
             if feat_row.isna().any():
+                nan_cols = feat_row[feat_row.isna()].index.tolist()
+                log.info("⚠️  Feature NaN → ข้ามแท่ง | cols=%s", nan_cols)
                 return
         except Exception as e:
-            log.debug("feature build skip: %s", e)
+            log.info("⚠️  Feature build error → ข้ามแท่ง: %s", e)
             return
 
         # 🆕 🅑 ATR-Spike Filter — กันเทรดตอนตลาด volatile ผิดปกติ
@@ -393,6 +568,7 @@ class HyperBot:
         spec = MT5Connector.get_symbol_spec(self.symbol)
         tick = MT5Connector.get_tick(self.symbol)
         if tick is None or tick.ask <= 0 or tick.bid <= 0:
+            log.info("⚠️  ไม่มี tick data → ข้ามแท่ง (tick=%s)", tick)
             return
         cur_spread = (tick.ask - tick.bid) / spec.point
         self.spread_tracker.update(cur_spread)
@@ -400,6 +576,8 @@ class HyperBot:
         # G. Already in trade? -> skip new entry
         live = MT5Connector.positions(symbol=self.symbol, magic=self.magic)
         if live:
+            log.info("📌 มี position %d ไม้อยู่แล้ว (ticket=%s) → ข้ามการเปิดใหม่",
+                     len(live), [p.ticket for p in live])
             return
 
         # H. News block
@@ -415,9 +593,40 @@ class HyperBot:
         conf = float(proba[pred])
         side = "BUY" if pred == 2 else ("SELL" if pred == 0 else "HOLD")
 
-        base_thr = float(self.cfg_h.get("min_confidence", self.cfg_a.get("min_confidence", 0.35)))
-        hour_utc = datetime.fromtimestamp(bar_time, tz=timezone.utc).hour
-        thr = self._session_threshold(base_thr, hour_utc)
+        # 🆕 Same-Direction Recovery — ระหว่าง recovery บังคับเทรดทิศเดิมกับที่เสีย
+        # เหตุผล: ถ้าเสีย BUY → แสดงว่า setup ยังไม่หมด → กู้ด้วย BUY ต่อ ไม่ใช่ SELL
+        in_recovery = self.recovery.consecutive_losses > 0 and self.recovery.last_side is not None
+        if in_recovery and bool(self.cfg_r.get("same_direction_enabled", False)):
+            forced_side = self.recovery.last_side
+            forced_pred = 2 if forced_side == "BUY" else 0
+            forced_conf = float(proba[forced_pred])
+            if pred != forced_pred:
+                log.info("♻️  Same-dir recovery: AI=%s %.1f%% แต่บังคับ %s %.1f%% (เสียติด %d ไม้ทิศ %s)",
+                         side, conf*100, forced_side, forced_conf*100,
+                         self.recovery.consecutive_losses, forced_side)
+            pred = forced_pred
+            conf = forced_conf
+            side = forced_side
+
+        # Always use best_threshold from model_meta (set at load time) — exact match to OOS simulation
+        base_thr = self._best_threshold if self._best_threshold is not None else \
+                   float(self.cfg_h.get("min_confidence", self.cfg_a.get("min_confidence", 0.45)))
+        bar_broker = self._bar_broker_datetime(bar_time)
+        hour_broker = bar_broker.hour
+
+        blocked, block_reason = self._is_slot_blocked(bar_time)
+        if blocked:
+            log.info("🕐 Blocked slot %s → ข้ามแท่ง", block_reason)
+            return
+
+        thr = self._session_threshold(base_thr, hour_broker)
+
+        # 🆕 Recovery threshold reduction — ลด threshold ระหว่าง recovery เพื่อให้เทรดถี่ขึ้น
+        thr_reduce = float(self.cfg_r.get("recovery_threshold_reduce", 0.0))
+        if in_recovery and thr_reduce > 0:
+            old_thr = thr
+            thr = max(0.35, thr - thr_reduce)
+            log.debug("♻️  Recovery threshold: %.2f → %.2f (ลด %.2f)", old_thr, thr, thr_reduce)
 
         # 🆕 Per-direction confidence override (anti-bias)
         # ถ้า model มี directional bias (เช่น BUY แม่นน้อยกว่า SELL) → ตั้ง threshold คนละค่า
@@ -530,20 +739,34 @@ class HyperBot:
             log.info("🚫 ยกเลิก: spread กว้างเกิน — %s", reason)
             return
 
+        rec_block = self._recovery_entry_block_reason(side, feat_row)
+        if rec_block:
+            log.info("🛡️  Recovery guard: %s → ข้าม", rec_block)
+            return
+
         # 🆕 Tick-Level Confirmation — ดู tick ล่าสุดก่อนยิง (กัน fake signal/stop hunt)
         tick_cfg = self.cfg_h.get("tick_confirmation", {})
         if tick_cfg.get("enabled", False):
             try:
                 from .tick_analyzer import analyze_ticks_for_signal
+                in_rec = self.recovery.consecutive_losses > 0
+                strict = bool(self.cfg_r.get("strict_tick_in_recovery", True)) and in_rec
+                max_hunt = float(tick_cfg.get("max_stop_hunt_score", 0.7))
+                max_burst = float(tick_cfg.get("max_velocity_burst", 0.85))
+                micro_align = bool(tick_cfg.get("require_micro_trend_aligned", False))
+                if strict:
+                    max_hunt = min(max_hunt, float(self.cfg_r.get("max_stop_hunt_score_recovery", 0.55)))
+                    max_burst = min(max_burst, float(self.cfg_r.get("max_velocity_burst_recovery", 0.7)))
+                    micro_align = True
                 ta = analyze_ticks_for_signal(
                     symbol=self.symbol, side=side,
                     seconds_back=int(tick_cfg.get("seconds_back", 60)),
                     min_ticks=int(tick_cfg.get("min_ticks", 20)),
                     max_spread_zscore=float(tick_cfg.get("max_spread_zscore", 3.0)),
                     min_buy_ratio_for_buy=float(tick_cfg.get("min_directional_ratio", 0.55)),
-                    max_stop_hunt_score=float(tick_cfg.get("max_stop_hunt_score", 0.7)),
-                    max_velocity_burst=float(tick_cfg.get("max_velocity_burst", 0.85)),
-                    require_micro_trend_aligned=bool(tick_cfg.get("require_micro_trend_aligned", True)),
+                    max_stop_hunt_score=max_hunt,
+                    max_velocity_burst=max_burst,
+                    require_micro_trend_aligned=micro_align,
                 )
                 if not ta.confirmed:
                     log.info("🚫 Tick reject: %s | %s", ta.reason, ta.to_log())
@@ -622,38 +845,62 @@ class HyperBot:
         self._open_trade(side, conf, atr_value, cur_spread, lot)
         self._last_entry_ts = time.time()
 
-    # 🆕 Hourly Lot Multiplier — soft filter จาก stats per UTC hour
+    def _resolve_hourly_lot_multiplier(self, dow: int, hour: int) -> tuple[float, str]:
+        """
+        ลำดับ lookup:
+          1) slot_multipliers — แยกวัน×ชั่วโมง (ตรง heatmap / blocked_slots)
+          2) multipliers — ชั่วโมงเดียวทุกวัน (legacy)
+          3) default
+        """
+        default = float(self.cfg_hl.get("default", 1.0))
+        hour_mults = self.cfg_hl.get("multipliers", {}) or {}
+        slot_cfg = self.cfg_hl.get("slot_multipliers")
+
+        if slot_cfg:
+            if isinstance(slot_cfg, dict):
+                v = slot_cfg.get(f"{dow}_{hour}")
+                if v is not None:
+                    return float(v), "slot"
+            elif isinstance(slot_cfg, list):
+                for entry in slot_cfg:
+                    try:
+                        if int(entry.get("dow", -1)) == dow and int(entry.get("hour", -1)) == hour:
+                            return float(entry.get("mult", default)), "slot"
+                    except (TypeError, ValueError):
+                        continue
+
+        if str(hour) in hour_mults:
+            return float(hour_mults[str(hour)]), "hour"
+        return default, "default"
+
+    # 🆕 Hourly Lot Multiplier — วัน×ชั่วโมง broker (ตรง heatmap / blocked_slots)
     def _apply_hourly_lot_multiplier(self, lot: float, spec) -> float:
         """
-        ปรับ lot ตามชั่วโมง UTC ปัจจุบัน:
-          - ชั่วโมงที่ทำกำไรดี → คูณ > 1 (เพิ่ม lot)
-          - ชั่วโมงที่ขาดทุนหนัก → คูณ < 1 (ลด lot, ยังเทรดเก็บสถิติ)
-        Config: ai.hourly_lot_multiplier.{enabled, multipliers, min_lot, default}
+        ปรับ lot ตามช่วง broker ปัจจุบัน:
+          - slot_multipliers: แยกวัน+ชั่วโมง (Mon=0 … Sun=6, ชม. 0–23)
+          - multipliers: ชั่วโมงเดียวทุกวัน (fallback ถ้าไม่มี slot)
         """
         if not self.cfg_hl.get("enabled", False):
             return lot
-        # 🛡️ FIX: ห้ามคูณ lot ตอน recovery — recovery floors คำนวณไว้แล้วให้พอกู้
-        # ถ้าคูณซ้ำจะทำให้ lot ใหญ่เกินกฎ Loss Cap → ระเบิดได้
         if self.cfg_hl.get("disable_during_recovery", True) and self.recovery.consecutive_losses > 0:
             return lot
-        from datetime import datetime, timezone
-        h = datetime.now(timezone.utc).hour
-        mults = self.cfg_hl.get("multipliers", {}) or {}
-        default = float(self.cfg_hl.get("default", 1.0))
-        mult = float(mults.get(str(h), default))
+        bd = self._current_broker_datetime()
+        dow, h = bd.weekday(), bd.hour
+        mult, src = self._resolve_hourly_lot_multiplier(dow, h)
         if abs(mult - 1.0) < 1e-6:
             return lot
-        # คูณแล้ว clamp กับ min_lot ของ broker
         new_lot = lot * mult
         min_lot = float(self.cfg_hl.get("min_lot", spec.volume_min if hasattr(spec, "volume_min") else 0.01))
         if new_lot < min_lot:
-            # ถ้า mult เล็กมากจน lot ต่ำกว่า min broker → ใช้ min_lot (ยังเทรดเก็บสถิติ)
             new_lot = min_lot
-        # round to 2 decimals
         new_lot = round(new_lot, 2)
         emoji = "🚀" if mult > 1.2 else ("🐢" if mult < 0.8 else "➖")
-        log.info("%s Hourly mult: hour=%02d UTC × %.2f → lot %.2f → %.2f",
-                 emoji, h, mult, lot, new_lot)
+        off = self._broker_offset_hours()
+        dow_name = self._DOW_NAMES[dow]
+        log.info(
+            "%s Lot mult [%s]: %s %02d:xx broker (UTC%+d, %s) × %.2f → lot %.2f → %.2f",
+            emoji, src, dow_name, h, off, f"{dow}_{h}", mult, lot, new_lot,
+        )
         return new_lot
 
     # 🆕 Confidence-Tier Lot Multiplier — บูสต์ lot ตอน AI มั่นใจสูง
@@ -782,7 +1029,26 @@ class HyperBot:
         # 1) หา dynamic base + cap ตามขนาดบัญชี
         base, absolute_cap, balance = self._dynamic_lot_caps(spec, atr_value)
 
-        if not self.cfg_r.get("enabled", True) or self.recovery.consecutive_losses <= 0:
+        # ── Gentle Slope Recovery: ไม่มี active series แต่มี global_debt ──────────────
+        # ใช้ lot สูงกว่า base นิดหน่อย เพื่อกู้หนี้ carry-over ทีละน้อย (safe, ไม่ martingale)
+        global_debt = self.recovery.global_debt_usd
+        if (not self.cfg_r.get("enabled", True) or self.recovery.consecutive_losses <= 0):
+            if global_debt > 0.5:
+                tp_mult_g = float(self.cfg_t.get("tp_atr_mult", 2.0))
+                tp_dist_g = tp_mult_g * atr_value
+                if spec.trade_tick_size > 0 and spec.trade_tick_value > 0 and tp_dist_g > 0:
+                    com_g = float(Config.section("commission").get("per_lot_round_trip_usd", 0.0))
+                    net_g = (tp_dist_g * spec.trade_tick_value / spec.trade_tick_size) - com_g
+                    if net_g > 0:
+                        target_trades = float(self.cfg_r.get("debt_recovery_target_trades", 50))
+                        needed = global_debt / (target_trades * net_g)
+                        max_mult = float(self.cfg_r.get("debt_recovery_max_lot_mult", 3.0))
+                        elevated = min(base + needed, base * max_mult, absolute_cap)
+                        elevated = spec.normalize_volume(elevated)
+                        if elevated > base:
+                            log.info("💳 Gentle slope: global_debt=$%.2f → lot %.2f (base=%.2f, ≈%d ไม้จะคืนหนี้)",
+                                     global_debt, elevated, base, int(global_debt / max(net_g * (elevated - base), 1e-9)))
+                            return elevated
             return spec.normalize_volume(base)
 
         # 🌊 Regime override: ใน strong trend → ใช้ base lot เท่านั้น (no escalation)
@@ -806,27 +1072,50 @@ class HyperBot:
         # 1) Floor: geometric growth - lot ต้องโตแบบ exponentially หลังเสียทุกครั้ง
         mult = float(self.cfg_r.get("lot_multiplier", 1.7))
         max_steps = int(self.cfg_r.get("max_steps", 4))
-        steps_used = min(self.recovery.consecutive_losses, max_steps)
+        steps_used = (self.recovery.consecutive_losses if max_steps <= 0
+                      else min(self.recovery.consecutive_losses, max_steps))
         geometric_floor = base * (mult ** steps_used)
 
-        # 2) Recovery target: lot ที่ "พอ" recover ขาดทุน + min profit
+        # 2) Recovery target: กู้ทีเดียว (spread=1) ถ้าหนี้ไม่ใหญ่เกินไป
+        #    one_shot_max_debt_pct_of_balance: หนี้ > X% balance → กระจายอัตโนมัติให้ lot ไม่เกิน cap
+        import math
         min_profit = float(self.cfg_r.get("min_profit_target_usd", 1.0))
+        spread = max(1, int(self.cfg_r.get("recovery_spread_trades", 1)))
         target_usd = self.recovery.cumulative_loss_usd + min_profit
-        recovery_lot = target_usd / net_per_lot
+        max_debt_pct = float(self.cfg_r.get("one_shot_max_debt_pct_of_balance", 0))
+        if max_debt_pct > 0 and balance > 0 and target_usd > 0:
+            debt_limit = balance * max_debt_pct / 100.0
+            max_win_at_cap = absolute_cap * net_per_lot
+            if target_usd > debt_limit and max_win_at_cap > 0:
+                spread = max(spread, int(math.ceil(target_usd / max_win_at_cap)))
+                log.info(
+                    "🛡️ กู้ทีเดียวปลอดภัย: หนี้ $%.2f > %.0f%% balance ($%.0f) → "
+                    "กระจาย %d ไม้ (lot สูงสุด %.2f, win/ไม้≈$%.0f)",
+                    target_usd, max_debt_pct, debt_limit, spread, absolute_cap, max_win_at_cap)
+        recovery_lot = target_usd / (net_per_lot * spread)
 
         # 3) Volume floor: lot ต้องใหญ่กว่า "ผลรวม lot ทุกไม้ที่เสีย" × profit_multiplier
         #    เพื่อให้กำไรของไม้นี้มากกว่ายอด lot ที่เสียไปรวมกัน
         prof_vol_mult = float(self.cfg_r.get("profit_volume_multiplier", 1.3))
         volume_floor = self.recovery.cumulative_losing_volume * prof_vol_mult
 
-        # 4) Final = max ของทั้ง 3 floors, capped by absolute (จาก dynamic scaling)
-        #    🔒 ปัด UP ตาม volume_step ก่อน normalize เพื่อกัน banker's rounding
-        #       ทำให้ recovery floor ถูกปัดลงเป็น base_lot (ไม้แก้ไม่โต)
+        # 4) cap strategy:
+        #   geometric_floor: capped ที่ rec_lot_cap (base × max_recovery_lot_multiplier)
+        #   volume_floor:    capped ที่ rec_lot_cap — กัน exponential runaway
+        #   recovery_lot:    capped ที่ absolute_cap (balance-based) เท่านั้น
+        #                    ต้องไม่ถูก cap ด้วย rec_lot_cap เพราะ formula นี้คำนวณ exact lot
+        #                    ที่พอ cover debt ใน 1 win — ถ้า cap ต่ำกว่า debt ก็ไม่มีวันหมด
+        max_rec_mult = float(self.cfg_r.get("max_recovery_lot_multiplier", 2.5))
+        rec_lot_cap = (base * max_rec_mult) if max_rec_mult > 0 else absolute_cap
+        geometric_floor = min(geometric_floor, rec_lot_cap)
+        volume_floor    = min(volume_floor, rec_lot_cap)
+        recovery_lot    = min(recovery_lot, absolute_cap)   # ← balance cap เท่านั้น
+        # Final = max ของทั้ง 3 floors แล้ว cap ด้วย absolute_cap เท่านั้น
+        # (ไม่ cap ด้วย rec_lot_cap เพราะ recovery_lot อาจสูงกว่า rec_lot_cap และถูกต้อง)
         candidate = max(geometric_floor, recovery_lot, volume_floor)
         step = spec.volume_step if spec.volume_step > 0 else 0.01
-        import math
         candidate = math.ceil(candidate / step - 1e-9) * step
-        final = min(candidate, absolute_cap)
+        final = min(candidate, absolute_cap)   # ← แก้แล้ว: cap ด้วย balance เท่านั้น
         final = spec.normalize_volume(final)
 
         # log แบบเล่าเรื่อง: ทำไมเลือก lot นี้
@@ -837,12 +1126,12 @@ class HyperBot:
             "recover": "พอ recover ขาดทุน",
             "vol":     "ใหญ่กว่ารวม lot ที่เสีย ×%.1f" % prof_vol_mult,
         }[which]
-        log.info("🧮 คำนวณ lot: เสียติด %d ไม้ ค้าง $%.2f (lot รวม %.3f) → "
-                 "ใช้ %.2f lot [เลือก %s | options: geo=%.3f, ต้อง=%.3f, รวม×=%.3f | base=%.3f cap=%.2f bal=$%.0f]",
-                 self.recovery.consecutive_losses, self.recovery.cumulative_loss_usd,
-                 self.recovery.cumulative_losing_volume, final, why,
-                 geometric_floor, recovery_lot, volume_floor,
-                 base, absolute_cap, balance)
+        attempt = self.recovery.consecutive_losses + 1
+        max_s = int(self.cfg_r.get("max_steps", 4)) or 4
+        log.info(
+            "🧮 ไม้กู้ #%d/%d: ค้าง $%.2f → lot %.2f [ถ้าชนะปิดหนี้ทั้งก้อน | %s | geo=%.3f ต้อง=%.3f cap=%.2f]",
+            attempt, max_s, self.recovery.cumulative_loss_usd, final, why,
+            geometric_floor, recovery_lot, absolute_cap)
         return final
 
     # ============================================================ open trade
@@ -874,6 +1163,13 @@ class HyperBot:
 
         sl_mult = float(self.cfg_t.get("sl_atr_mult", 1.0))
         tp_mult = float(self.cfg_t.get("tp_atr_mult", 2.0))
+        if self.recovery.consecutive_losses > 0:
+            sl_rec = float(self.cfg_r.get("sl_atr_mult_recovery", 0))
+            tp_rec = float(self.cfg_r.get("tp_atr_mult_recovery", 0))
+            if sl_rec > 0:
+                sl_mult = sl_rec
+            if tp_rec > 0:
+                tp_mult = tp_rec
 
         result = open_market_order(
             symbol=self.symbol, side=side, volume=lot, atr_value=atr_value,
@@ -920,7 +1216,12 @@ class HyperBot:
         if not open_by_ticket:
             return
 
-        live_tickets = {p.ticket for p in MT5Connector.positions(symbol=self.symbol, magic=self.magic)}
+        try:
+            live_pos = MT5Connector.positions(symbol=self.symbol, magic=self.magic)
+        except ConnectionError as e:
+            log.warning("⚠️ MT5 disconnect ใน _update_closed_trades → ข้าม (ไม่นับว่าปิด): %s", e)
+            return
+        live_tickets = {p.ticket for p in live_pos}
         closed_tickets = [t for t in open_by_ticket if t not in live_tickets]
         if not closed_tickets:
             return
@@ -979,12 +1280,23 @@ class HyperBot:
                 if self.recovery.cumulative_loss_usd <= 0:
                     self._on_recovery_complete()
                 else:
-                    log.info("   ↳ ยังเหลือหนี้อีก $%.2f (ชนะแต่ยังไม่หมด)",
-                             self.recovery.cumulative_loss_usd)
+                    log.info(
+                        "   ↳ ชนะแต่ยังไม่ครบหนี้ — เหลือ $%.2f → ไม้กู้ถัดไปจะลองปิดทั้งก้อนอีก",
+                        self.recovery.cumulative_loss_usd)
+                # หักหนี้ global ด้วย (ไม่ว่าจะอยู่ใน series หรือ gentle slope)
+                if self.recovery.global_debt_usd > 0:
+                    before = self.recovery.global_debt_usd
+                    self.recovery.global_debt_usd = max(0.0, self.recovery.global_debt_usd - pnl)
+                    if self.recovery.global_debt_usd <= 0:
+                        log.info("🎊 Global debt cleared! หนี้สะสม $%.2f คืนหมดแล้ว", before)
+                    else:
+                        log.info("   ↳ global_debt เหลือ $%.2f (หักได้ $%.2f)",
+                                 self.recovery.global_debt_usd, pnl)
             else:
                 self.recovery.cumulative_loss_usd += abs(pnl)
                 self.recovery.cumulative_losing_volume += float(row["volume"] or 0.0)
                 self.recovery.consecutive_losses += 1
+                self.recovery.last_loss_ts = time.time()
                 # 🆕 update direction-flip counter
                 trade_side = "BUY" if row["prediction"] == 2 else "SELL"
                 if self.recovery.last_loss_side == trade_side:
@@ -998,7 +1310,7 @@ class HyperBot:
                          self.recovery.cumulative_losing_volume)
                 # 🆕 🅒 Per-Series Loss Cap — ปิด series ก่อนที่ max_steps จะระเบิด
                 cap_cfg = self.cfg_rf.get("series_loss_cap", {})
-                if cap_cfg.get("enabled", True):
+                if cap_cfg.get("enabled", False):  # default False — ต้องเปิดใน config ถึงจะทำงาน
                     cap_pct = float(cap_cfg.get("max_loss_pct_of_balance", 8.0))
                     bal = self._get_balance()
                     if bal > 0:
@@ -1010,7 +1322,7 @@ class HyperBot:
                             self._save_recovery()
                             continue
                 max_steps = int(self.cfg_r.get("max_steps", 4))
-                if self.recovery.consecutive_losses >= max_steps:
+                if max_steps > 0 and self.recovery.consecutive_losses >= max_steps:
                     self._on_max_steps_exceeded()
 
             self._save_recovery()
@@ -1038,25 +1350,39 @@ class HyperBot:
         self.recovery.series_id = None
         self.recovery.last_side = None
         self.recovery.pause_resume_count = 0
+        # หนี้ global (carry-over จาก series ก่อน) ยังคงอยู่ → จะค่อยๆ หักผ่าน gentle slope
 
     def _on_max_steps_exceeded(self) -> None:
         sid = self.recovery.series_id
         halt_min = float(self.cfg_r.get("halt_after_max_steps_minutes", 10))
-        log.error("🛑 ครบ max_steps! เสียติด %d ไม้ ขาดทุน $%.2f → หยุดเทรด %d นาที แล้วเริ่มใหม่",
-                  self.recovery.consecutive_losses,
-                  self.recovery.cumulative_loss_usd, int(halt_min))
+        remaining_debt = self.recovery.cumulative_loss_usd
+        max_steps = int(self.cfg_r.get("max_steps", 4))
+        if halt_min > 0:
+            log.error("🛑 ครบ max_steps (%d)! เสียติด %d ไม้ ขาดทุน $%.2f → หยุดเทรด %d นาที",
+                      max_steps, self.recovery.consecutive_losses, remaining_debt, int(halt_min))
+        else:
+            log.warning(
+                "🛑 ครบ %d ไม้ — ไม่บังคับกู้ต่อ (เอาเท่าที่ไหว) | หนี้ค้าง $%.2f → global_debt | "
+                "เทรดต่อปกติ — ช่วงแพ้ยาวจะ block จาก analyze_slots ทีหลัง",
+                max_steps, remaining_debt)
         if sid is not None:
             self.db.close_series(sid, status="CLOSED_MAX_STEPS",
-                                 final_pnl=-self.recovery.cumulative_loss_usd,
+                                 final_pnl=-remaining_debt,
                                  total_volume=0.0, avg_entry_price=0.0,
-                                 notes=f"halted after {self.recovery.consecutive_losses} losses")
+                                 notes=f"max_steps={max_steps} after {self.recovery.consecutive_losses} losses")
             self.webhook.series_closed({
                 "series_id": sid, "symbol": self.symbol,
                 "consecutive_losses": self.recovery.consecutive_losses,
-                "final_pnl": -self.recovery.cumulative_loss_usd,
+                "final_pnl": -remaining_debt,
                 "reason": "MAX_STEPS",
             })
-        self.recovery.halted_until_ts = time.time() + halt_min * 60
+        # ย้ายหนี้ไปยัง global_debt — กู้ทีละน้อยผ่าน gentle slope ไม่ไล่ martingale
+        self.recovery.global_debt_usd += remaining_debt
+        log.warning("💳 หนี้ carry-over: $%.2f → global_debt รวม $%.2f (gentle slope ~%d ไม้)",
+                    remaining_debt, self.recovery.global_debt_usd,
+                    int(self.cfg_r.get("debt_recovery_target_trades", 50)))
+        if halt_min > 0:
+            self.recovery.halted_until_ts = time.time() + halt_min * 60
         self.recovery.cumulative_loss_usd = 0.0
         self.recovery.cumulative_losing_volume = 0.0
         self.recovery.consecutive_losses = 0
@@ -1098,17 +1424,22 @@ class HyperBot:
 
         # === CLOSE mode (หรือ pause-resume หมดโอกาสแล้ว) ===
         reason_label = "LOSS_CAP_EXHAUSTED" if action == "pause_resume" else "LOSS_CAP"
+        remaining_debt = self.recovery.cumulative_loss_usd
         if sid is not None:
             self.db.close_series(sid, status=f"CLOSED_{reason_label}",
-                                 final_pnl=-self.recovery.cumulative_loss_usd,
+                                 final_pnl=-remaining_debt,
                                  total_volume=0.0, avg_entry_price=0.0,
                                  notes=f"loss cap final close after {self.recovery.pause_resume_count} pauses")
             self.webhook.series_closed({
                 "series_id": sid, "symbol": self.symbol,
                 "consecutive_losses": self.recovery.consecutive_losses,
-                "final_pnl": -self.recovery.cumulative_loss_usd,
+                "final_pnl": -remaining_debt,
                 "reason": reason_label,
             })
+        # ย้ายหนี้ไปยัง global_debt แทนที่จะลืม
+        self.recovery.global_debt_usd += remaining_debt
+        log.warning("💳 หนี้ carry-over (loss cap): $%.2f → global_debt รวม $%.2f",
+                    remaining_debt, self.recovery.global_debt_usd)
         self.recovery.halted_until_ts = time.time() + halt_min * 60
         self.recovery.cumulative_loss_usd = 0.0
         self.recovery.cumulative_losing_volume = 0.0
@@ -1117,6 +1448,81 @@ class HyperBot:
         self.recovery.last_side = None
         self.recovery.pause_resume_count = 0
         log.error("🛑 Series ปิดถาวรแล้ว (ใช้โอกาส resume หมด) → halt %d นาที", int(halt_min))
+
+    # ============================================================ Friday / weekend close
+    def _friday_close_status(self) -> dict:
+        """คืน dict ที่บอกว่าตอนนี้อยู่ใน zone ไหนของ Friday close
+        Returns:
+            zone: "normal" | "no_new_entry" | "force_close" | "weekend"
+            minutes_to_close: นาทีที่เหลือก่อน market_close (ลบ = ผ่านไปแล้ว)
+        """
+        cfg_wc = Config.section("weekend_close")
+        if not cfg_wc.get("enabled", False):
+            return {"zone": "normal", "minutes_to_close": 9999}
+
+        now_utc = datetime.now(timezone.utc)
+        weekday = now_utc.weekday()  # Mon=0 … Fri=4, Sat=5, Sun=6
+
+        close_hour = int(cfg_wc.get("market_close_hour_utc", 21))
+        close_min = int(cfg_wc.get("market_close_minute_utc", 0))
+        no_entry_before = int(cfg_wc.get("no_new_entry_minutes_before_close", 60))
+        force_close_before = int(cfg_wc.get("force_close_minutes_before_close", 15))
+        reopen_hour_mon = int(cfg_wc.get("market_reopen_hour_utc_monday", 22))
+
+        # ===== วันเสาร์หรือวันอาทิตย์ก่อนเวลา reopen Monday =====
+        if weekday == 5:  # Saturday
+            return {"zone": "weekend", "minutes_to_close": -9999}
+        if weekday == 6:  # Sunday ก่อน reopen
+            if now_utc.hour < reopen_hour_mon:
+                return {"zone": "weekend", "minutes_to_close": -9999}
+            return {"zone": "normal", "minutes_to_close": 9999}
+
+        # ===== วันศุกร์ =====
+        if weekday == 4:  # Friday
+            close_dt = now_utc.replace(hour=close_hour, minute=close_min, second=0, microsecond=0)
+            minutes_to_close = (close_dt - now_utc).total_seconds() / 60.0
+
+            if minutes_to_close <= 0:
+                # ผ่านเวลาปิดแล้ว — ถือว่า weekend
+                return {"zone": "weekend", "minutes_to_close": minutes_to_close}
+            if minutes_to_close <= force_close_before:
+                return {"zone": "force_close", "minutes_to_close": minutes_to_close}
+            if minutes_to_close <= no_entry_before:
+                return {"zone": "no_new_entry", "minutes_to_close": minutes_to_close}
+
+        return {"zone": "normal", "minutes_to_close": 9999}
+
+    def _maybe_close_friday_positions(self) -> bool:
+        """ปิด position ทั้งหมดเมื่ออยู่ใน force_close / weekend zone
+        คืน True ถ้าปิดไปแล้ว (caller ควร return ทันที)
+        """
+        status = self._friday_close_status()
+        zone = status["zone"]
+
+        if zone not in ("force_close", "weekend"):
+            return False
+
+        live = MT5Connector.positions(symbol=self.symbol, magic=self.magic)
+        if not live:
+            return False
+
+        mins = status["minutes_to_close"]
+        if zone == "force_close":
+            log.warning("⏰ Friday Force-Close: เหลือ %.1f นาทีก่อนตลาดปิด → ปิด %d position ทันที",
+                        mins, len(live))
+        else:
+            log.warning("⏰ Weekend zone: ตลาดปิดแล้ว → ปิด %d position ที่ค้างอยู่", len(live))
+
+        for p in live:
+            ok = close_position(p.ticket)
+            side_txt = "BUY" if p.type == 0 else "SELL"
+            if ok:
+                log.info("✅ Friday-close ปิดสำเร็จ: #%d %s %.2f lot @entry %.3f | PnL ≈ $%.2f",
+                         p.ticket, side_txt, p.volume, p.price_open, p.profit)
+            else:
+                log.error("❌ Friday-close ปิดไม่สำเร็จ: #%d %s — จะลองใหม่รอบถัดไป",
+                          p.ticket, side_txt)
+        return True
 
     # ============================================================ smart trailing
     def _manage_trailing(self) -> None:
@@ -1207,44 +1613,6 @@ class HyperBot:
                 }.get(trail_mode, trail_mode)
                 log.info("📈 เลื่อน SL ไม้ #%d [%s] | กำไรวิ่ง %.3f → SL: %.3f → %.3f",
                          p.ticket, tag, profit_price, cur_sl, sl_target)
-        # mode="atr"        → trail_dist = trail_distance_atr × ATR  (legacy คงที่)
-        trail_mode = str(self.cfg_st.get("trail_mode", "percentage")).lower()
-        trail_pct = max(0.05, min(0.95, float(self.cfg_st.get("trail_pct_of_excursion", 0.30))))
-        trail_dist_atr_val = float(self.cfg_st.get("trail_distance_atr", 0.3)) * atr_value
-        trail_step = float(self.cfg_st.get("trail_step_atr", 0.1)) * atr_value
-
-        for p in live:
-            entry = float(p.price_open)
-            is_buy = (p.type == 0)
-            cur = float(tick.bid if is_buy else tick.ask)
-            profit_price = (cur - entry) if is_buy else (entry - cur)
-            if profit_price < be_trigger:
-                continue
-
-            # คำนวณ trail distance ตาม mode
-            if trail_mode == "percentage":
-                trail_dist = profit_price * trail_pct
-                # เผื่อ minimum (กัน trail แคบเกินจน MT5 reject)
-                trail_dist = max(trail_dist, 0.10 * atr_value)
-            else:
-                trail_dist = trail_dist_atr_val
-
-            if is_buy:
-                sl_target = max(entry + be_lock, cur - trail_dist)
-            else:
-                sl_target = min(entry - be_lock, cur + trail_dist)
-            sl_target = spec.normalize_price(sl_target)
-
-            cur_sl = float(p.sl) if p.sl else 0.0
-            if is_buy and cur_sl > 0 and sl_target <= cur_sl + trail_step:
-                continue
-            if (not is_buy) and cur_sl > 0 and sl_target >= cur_sl - trail_step:
-                continue
-            if modify_position_sl(p.ticket, new_sl=sl_target, new_tp=p.tp):
-                lock_pct = (1.0 - trail_pct) * 100 if trail_mode == "percentage" else 0.0
-                mode_tag = ("pct lock %.0f%%" % lock_pct) if trail_mode == "percentage" else "atr"
-                log.info("📈 เลื่อน SL ไม้ #%d [%s] | กำไรวิ่ง %.3f → SL: %.3f → %.3f (ทิ้งระยะ %.3f)",
-                         p.ticket, mode_tag, profit_price, cur_sl, sl_target, trail_dist)
 
     # ============================================================ global equity stop
     def _maybe_global_equity_stop(self) -> None:
@@ -1255,7 +1623,10 @@ class HyperBot:
         if acc is None or acc.balance <= 0:
             return
         max_loss = float(acc.balance) * pct / 100.0
-        live = MT5Connector.positions(symbol=self.symbol, magic=self.magic)
+        try:
+            live = MT5Connector.positions(symbol=self.symbol, magic=self.magic)
+        except ConnectionError:
+            return  # ไม่รู้ floating → ข้าม equity stop รอบนี้
         floating = sum(float(p.profit) + float(p.swap) for p in live)
         effective = self.recovery.cumulative_loss_usd + max(0.0, -floating)
         if effective < max_loss:
@@ -1264,24 +1635,22 @@ class HyperBot:
                   effective, max_loss, pct)
         for p in live:
             close_position(p.ticket)
-        # ใช้ halt logic เดียวกับ max_steps (cooldown + reset state) แต่ไม่ log ซ้ำว่าเป็น max_steps
+        # ไม่รีเซ็ต cumulative_loss — ให้ _update_closed_trades บันทึก PnL จริงทีละไม้
+        # (รีเซ็ตก่อนหน้านี้ทำให้หนี้ $80 หาย เหลือแค่ -$162 ใน state)
         sid = self.recovery.series_id
         halt_min = float(self.cfg_r.get("halt_after_max_steps_minutes", 10))
         if sid is not None:
             self.db.close_series(sid, status="CLOSED_EQUITY_STOP",
-                                 final_pnl=-self.recovery.cumulative_loss_usd,
+                                 final_pnl=-effective,
                                  total_volume=0.0, avg_entry_price=0.0,
-                                 notes=f"equity stop after {self.recovery.consecutive_losses} losses")
+                                 notes=f"equity stop effective=${effective:.2f}")
             self.webhook.series_closed({
                 "series_id": sid, "symbol": self.symbol,
                 "consecutive_losses": self.recovery.consecutive_losses,
-                "final_pnl": -self.recovery.cumulative_loss_usd,
+                "final_pnl": -effective,
                 "reason": "EQUITY_STOP",
             })
         self.recovery.halted_until_ts = time.time() + halt_min * 60
-        self.recovery.cumulative_loss_usd = 0.0
-        self.recovery.cumulative_losing_volume = 0.0
-        self.recovery.consecutive_losses = 0
         self.recovery.series_id = None
         self.recovery.last_side = None
         self._save_recovery()

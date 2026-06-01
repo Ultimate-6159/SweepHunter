@@ -312,7 +312,15 @@ class MT5Connector:
         resolved = cls.resolve_symbol(symbol) if symbol else None
         pos = mt5.positions_get(symbol=resolved) if resolved else mt5.positions_get()
         if pos is None:
-            return []
+            # None = MT5 disconnected หรือ error — ลอง reconnect 1 ครั้ง
+            err = mt5.last_error()
+            log.warning("positions_get=None (err=%s) — trying reconnect", err)
+            cls._initialised = False
+            if cls.initialise():
+                pos = mt5.positions_get(symbol=resolved) if resolved else mt5.positions_get()
+            if pos is None:
+                # ยังไม่ได้ข้อมูล → raise เพื่อไม่ให้ caller ตีความว่า flat
+                raise ConnectionError("MT5 positions_get failed after reconnect attempt")
         if magic is not None:
             pos = [p for p in pos if p.magic == magic]
         return list(pos)

@@ -1,8 +1,6 @@
 @echo off
-chcp 65001 >nul
 cd /d "%~dp0"
+chcp 65001 > nul
 if exist "%~dp0.python_path.txt" (set /p PYEXE=<"%~dp0.python_path.txt") else (set PYEXE=python)
-title Retrain
-echo === Retrain 5 seeds === & echo.
-"%PYEXE%" run.py train5 5
-echo. & pause
+"%PYEXE%" simulate_recovery.py
+pause

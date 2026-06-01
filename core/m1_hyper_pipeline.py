@@ -87,6 +87,17 @@ FEATURE_COLUMNS: List[str] = [
     "mom_wick_imbalance",      # (upper - lower) / (upper + lower)
     "mom_pattern_bull_5",      # count of bullish patterns in last 5 bars
     "mom_pattern_bear_5",      # count of bearish patterns in last 5 bars
+    # ---- 🆕 V4: Smart Market Structure + Volume Analysis ----
+    "liq_sweep_bull",          # bullish liquidity sweep score (bear SL hunt → price recovers)
+    "liq_sweep_bear",          # bearish liquidity sweep score (bull SL hunt → price drops)
+    "mom_divergence",          # RSI vs price divergence: +1=bull div, 0=none, -1=bear div
+    "order_block_bull",        # bullish order block: bearish candle precedes strong up impulse
+    "order_block_bear",        # bearish order block: bullish candle precedes strong down impulse
+    "fvg_bull",                # bullish fair value gap (gap up — mean-reversion from below)
+    "fvg_bear",                # bearish fair value gap (gap down — mean-reversion from above)
+    "cum_delta_norm",          # normalized cumulative volume delta (+= buying pressure)
+    "vol_poc_dist",            # distance from VWAP/POC proxy to close price (ATRs)
+    "supply_demand_imbal",     # (bull_vol − bear_vol) / total_vol in 20-bar window
 ]
 
 
@@ -220,8 +231,8 @@ def build_features(rates) -> pd.DataFrame:
     # ----- Volume Acceleration (SRD: vol vs avg(last 3)) -----
     vol = df["tick_volume"].astype(float)
     vol_recent = vol.shift(1).rolling(3, min_periods=3).mean()
-    df["vol_accel_3"] = vol / vol_recent.replace(0, np.nan)
-    df["vol_spike_10"] = vol / vol.rolling(10, min_periods=10).mean().replace(0, np.nan)
+    df["vol_accel_3"] = (vol / vol_recent.replace(0, np.nan)).fillna(1.0)
+    df["vol_spike_10"] = (vol / vol.rolling(10, min_periods=10).mean().replace(0, np.nan)).fillna(1.0)
 
     # ----- Micro Breakout Signal (SRD: ทะลุ High/Low ของ 5 แท่งล่าสุด) -----
     rolling_high_5 = h.shift(1).rolling(5, min_periods=5).max()
@@ -350,21 +361,95 @@ def build_features(rates) -> pd.DataFrame:
     df["mom_pattern_bull_5"] = bull_patterns.rolling(5, min_periods=1).sum().fillna(0)
     df["mom_pattern_bear_5"] = bear_patterns.rolling(5, min_periods=1).sum().fillna(0)
 
+    # ----- 🆕 V4: Smart Market Structure + Volume Analysis -----
+
+    # --- Liquidity Sweep Score ---
+    # bull sweep: price briefly dipped below 10-bar low then closed above it
+    # score = how far below it went (sweep depth) / ATR → bigger spike = stronger sweep
+    prev_low_10 = l.shift(1).rolling(10, min_periods=5).min()
+    prev_high_10 = h.shift(1).rolling(10, min_periods=5).max()
+    bull_swept = (l < prev_low_10) & (c > prev_low_10)
+    bear_swept = (h > prev_high_10) & (c < prev_high_10)
+    df["liq_sweep_bull"] = (bull_swept * ((prev_low_10 - l).clip(lower=0) / atr_safe)).fillna(0).clip(0, 3)
+    df["liq_sweep_bear"] = (bear_swept * ((h - prev_high_10).clip(lower=0) / atr_safe)).fillna(0).clip(0, 3)
+
+    # --- Momentum Divergence (RSI vs Price) ---
+    # +1 = bullish divergence (price falling, RSI rising → reversal up)
+    # -1 = bearish divergence (price rising, RSI falling → reversal down)
+    # 0  = no divergence / aligned
+    price_dir_3 = np.sign(c - c.shift(3))
+    rsi_dir_3 = np.sign(df["rsi_7"] - df["rsi_7"].shift(3))
+    # divergence when price and RSI move in opposite directions
+    mom_div_raw = (rsi_dir_3 - price_dir_3)  # +2=bull div, -2=bear div, 0=aligned, ±1=partial
+    df["mom_divergence"] = (mom_div_raw / 2.0).fillna(0).clip(-1, 1)
+
+    # --- Order Block Detection ---
+    # Bullish OB: a strong bearish candle (body > 0.5 ATR) followed within 1-3 bars by a strong bullish candle
+    # Indicates institutional demand at that price level
+    strong_bear_body = (body_signed < -0.5 * atr_safe)
+    strong_bull_body = (body_signed > 0.5 * atr_safe)
+    # OB bull: was there a strong bear candle 1 or 2 bars ago, and current is strong bull?
+    ob_bull_trigger = (strong_bear_body.shift(1) | strong_bear_body.shift(2)) & strong_bull_body
+    # OB bear: strong bull candle 1-2 bars ago, now strong bearish move
+    ob_bear_trigger = (strong_bull_body.shift(1) | strong_bull_body.shift(2)) & strong_bear_body
+    df["order_block_bull"] = ob_bull_trigger.astype(float).fillna(0)
+    df["order_block_bear"] = ob_bear_trigger.astype(float).fillna(0)
+
+    # --- Fair Value Gap (FVG) ---
+    # Bullish FVG: current bar's low > 2-bars-ago high → gap up (institutional imbalance, price may retrace up)
+    # Bearish FVG: current bar's high < 2-bars-ago low → gap down
+    df["fvg_bull"] = (l > h.shift(2)).astype(float).fillna(0)
+    df["fvg_bear"] = (h < l.shift(2)).astype(float).fillna(0)
+
+    # --- Cumulative Volume Delta (buying vs selling pressure) ---
+    # Approximate buy/sell volume from candle structure (no raw tick data available)
+    # buy_vol = tick_vol × (close−low)/(high−low)  — fraction that went up
+    # sell_vol = tick_vol × (high−close)/(high−low) — fraction that went down
+    candle_range_safe = (h - l).replace(0, np.nan)
+    buy_frac = ((c - l) / candle_range_safe).fillna(0.5).clip(0, 1)
+    buy_vol_20 = (vol * buy_frac).rolling(20, min_periods=5).sum()
+    sell_vol_20 = (vol * (1.0 - buy_frac)).rolling(20, min_periods=5).sum()
+    vol_mean_20 = vol.rolling(20, min_periods=10).mean().replace(0, np.nan)
+    # Normalize by vol_mean × 20 bars so it's scale-independent
+    cum_delta = buy_vol_20 - sell_vol_20
+    df["cum_delta_norm"] = (cum_delta / (vol_mean_20 * 20.0)).fillna(0).clip(-1, 1)
+
+    # --- Volume POC Distance (VWAP proxy) ---
+    # VWAP over 20 bars = volume-weighted average price → proxy for point of control
+    # Price below VWAP → discount zone (potential support / demand)
+    # Price above VWAP → premium zone (potential resistance / supply)
+    vwap_20 = (c * vol).rolling(20, min_periods=10).sum() / vol.rolling(20, min_periods=10).sum().replace(0, np.nan)
+    df["vol_poc_dist"] = ((c - vwap_20) / atr_safe).fillna(0).clip(-5, 5)
+
+    # --- Supply/Demand Zone Imbalance ---
+    # Bull pressure volume vs bear pressure volume in 20-bar lookback
+    # +1 = all demand (buying), -1 = all supply (selling)
+    bear_vol_sum = (vol * (body_signed < 0)).rolling(20, min_periods=10).sum()
+    bull_vol_sum = (vol * (body_signed >= 0)).rolling(20, min_periods=10).sum()
+    total_vol_sum = (bear_vol_sum + bull_vol_sum).replace(0, np.nan)
+    df["supply_demand_imbal"] = ((bull_vol_sum - bear_vol_sum) / total_vol_sum).fillna(0).clip(-1, 1)
+
     return df
 
 
 # --------------------------------------------------------------------- labeling
 def aggressive_label(
     df: pd.DataFrame,
-    tp_atr: float = 0.6,
-    sl_atr: float = 1.2,
-    lookahead: int = 30,
+    tp_atr: float = 1.6,
+    sl_atr: float = 0.8,
+    lookahead: int = 12,
 ) -> pd.Series:
     """
-    Hyper-Aggressive Labeling (SRD):
-      - TP = 0.6 * ATR (เล็ก) | SL = 1.2 * ATR (ใหญ่กว่า) -> WIN ครอบคลุม
-      - สแกน lookahead 30 แท่ง M1 (~30 นาที)
-      - 2 = BUY win, 0 = SELL win, 1 = HOLD (ทั้งคู่ไม่ชัดเจน หรือชน SL ก่อน)
+    Profit-Driven Triple-Barrier Labeling (v3 — "ชนะให้ใหญ่ เสียให้เล็ก"):
+
+      Defaults: TP = 1.6 ATR, SL = 0.8 ATR  → RR = 2:1
+      - lookahead สั้น (12 แท่ง) → ไม่ hold นาน, สอน model ให้เห็นโอกาสที่
+        "วิ่งเร็วและไกล" ภายในหน้าต่างสั้น
+      - Tie-break (TP+SL ในแท่งเดียวกัน) = SL ก่อน → conservative,
+        ป้องกัน label ให้สัญญาณ WIN ทั้งที่จริงๆอาจชน SL ก่อน
+      - 2 = BUY win, 0 = SELL win, 1 = HOLD
+
+    NOTE: aggressive_label ชื่อนี้ legacy — พฤติกรรมเปลี่ยนเป็น profit-driven แล้ว
     """
     n = len(df)
     labels = np.full(n, 1, dtype=np.int8)
@@ -393,25 +478,139 @@ def aggressive_label(
             if not buy_resolved:
                 tp_hit = hj >= tp_up
                 sl_hit = lj <= sl_dn
-                if tp_hit and sl_hit:
-                    buy_resolved = True  # worst case
+                # 🛡️ tie-break: ถ้าทั้ง TP และ SL hit ในแท่งเดียวกัน → ถือว่า SL ก่อน
+                #    (conservative — กัน label พูดเกินจริง)
+                if sl_hit:
+                    buy_resolved = True  # SL ก่อน → loss
                 elif tp_hit:
                     buy_resolved = True; buy_win = True
-                elif sl_hit:
-                    buy_resolved = True
             if not sell_resolved:
                 tp_hit = lj <= tp_dn
                 sl_hit = hj >= sl_up
-                if tp_hit and sl_hit:
+                if sl_hit:
                     sell_resolved = True
                 elif tp_hit:
                     sell_resolved = True; sell_win = True
-                elif sl_hit:
-                    sell_resolved = True
             if buy_resolved and sell_resolved:
                 break
 
-        # ทั้งสองฝั่ง win -> ambiguous -> hold
+        # ฝั่งใดฝั่งหนึ่งชัดเจน → label ฝั่งนั้น
+        if buy_win and not sell_win:
+            labels[i] = 2
+        elif sell_win and not buy_win:
+            labels[i] = 0
+
+    return pd.Series(labels, index=df.index, name="label")
+
+
+def regime_label(
+    df: pd.DataFrame,
+    lookahead: int = 12,
+) -> pd.Series:
+    """
+    🆕 Regime-Aware Asymmetric Labeling (v4):
+    ใช้ market regime ที่ตรวจจับได้ เพื่อตั้ง TP/SL แบบ asymmetric ตามทิศทาง
+
+    Regimes detected from `df` columns (computed by build_features):
+      TRENDING_UP   (htf1_trend_dir > 0 AND htf1_ema_dist_atr > threshold)
+        → BUY:  TP=1.8×ATR, SL=0.6×ATR  (trend follower, tight SL)
+        → SELL: TP=1.2×ATR, SL=1.2×ATR  (counter-trend, balanced — rare signal)
+
+      TRENDING_DOWN (htf1_trend_dir < 0 AND htf1_ema_dist_atr < -threshold)
+        → SELL: TP=1.4×ATR, SL=1.0×ATR
+        → BUY:  TP=1.2×ATR, SL=1.2×ATR
+
+      HIGH_VOLATILITY (atr_ratio > 1.5)
+        → Skip labeling → HOLD (too risky)
+
+      BREAKOUT (breakout_up_5 OR breakout_dn_5 AND atr_ratio > 1.2)
+        → Aggressive: TP=2.0×ATR, SL=0.8×ATR
+
+      CHOPPY / DEFAULT
+        → TP=0.8×ATR, SL=1.2×ATR  (mean-reversion targets)
+
+    Falls back to aggressive_label defaults if required columns missing.
+    """
+    cfg = Config.section("trading")
+    n = len(df)
+    labels = np.full(n, 1, dtype=np.int8)
+
+    close = df["close"].to_numpy()
+    high  = df["high"].to_numpy()
+    low   = df["low"].to_numpy()
+    atr   = df["atr"].to_numpy()
+
+    # pull regime columns (may not exist in legacy dfs)
+    htf_trend = df.get("htf1_trend_dir", pd.Series(0.0, index=df.index)).to_numpy()
+    htf_dist  = df.get("htf1_ema_dist_atr", pd.Series(0.0, index=df.index)).to_numpy()
+    atr_ratio = df.get("atr_ratio", pd.Series(1.0, index=df.index)).to_numpy()
+    brk_up    = df.get("breakout_up_5", pd.Series(0.0, index=df.index)).to_numpy()
+    brk_dn    = df.get("breakout_dn_5", pd.Series(0.0, index=df.index)).to_numpy()
+
+    trend_thr = float(cfg.get("regime_trend_threshold", 0.5))
+
+    for i in range(n - 1):
+        a = atr[i]
+        if not np.isfinite(a) or a <= 0:
+            continue
+        entry = close[i]
+
+        # --- Detect regime at bar i ---
+        ar = float(atr_ratio[i]) if np.isfinite(atr_ratio[i]) else 1.0
+        td = float(htf_trend[i]) if np.isfinite(htf_trend[i]) else 0.0
+        hd = float(htf_dist[i]) if np.isfinite(htf_dist[i]) else 0.0
+        bu = bool(brk_up[i])
+        bd = bool(brk_dn[i])
+
+        # HIGH_VOLATILITY → skip (label stays HOLD)
+        if ar > 1.5:
+            continue
+
+        # BREAKOUT
+        if ar > 1.2 and (bu or bd):
+            buy_tp,  buy_sl  = 2.0, 0.8
+            sell_tp, sell_sl = 2.0, 0.8
+
+        # TRENDING_UP
+        elif td > 0 and hd > trend_thr:
+            buy_tp,  buy_sl  = 1.8, 0.6
+            sell_tp, sell_sl = 1.2, 1.2
+
+        # TRENDING_DOWN
+        elif td < 0 and hd < -trend_thr:
+            buy_tp,  buy_sl  = 1.2, 1.2
+            sell_tp, sell_sl = 1.4, 1.0
+
+        # CHOPPY / RANGE
+        else:
+            buy_tp,  buy_sl  = 0.8, 1.2
+            sell_tp, sell_sl = 0.8, 1.2
+
+        # triple-barrier forward scan
+        tp_up  = entry + buy_tp  * a
+        sl_dn  = entry - buy_sl  * a
+        tp_dn  = entry - sell_tp * a
+        sl_up  = entry + sell_sl * a
+
+        end = min(n, i + 1 + lookahead)
+        buy_resolved = sell_resolved = False
+        buy_win = sell_win = False
+
+        for j in range(i + 1, end):
+            hj, lj = high[j], low[j]
+            if not buy_resolved:
+                if lj <= sl_dn:
+                    buy_resolved = True
+                elif hj >= tp_up:
+                    buy_resolved = True; buy_win = True
+            if not sell_resolved:
+                if hj >= sl_up:
+                    sell_resolved = True
+                elif lj <= tp_dn:
+                    sell_resolved = True; sell_win = True
+            if buy_resolved and sell_resolved:
+                break
+
         if buy_win and not sell_win:
             labels[i] = 2
         elif sell_win and not buy_win:
@@ -423,12 +622,18 @@ def aggressive_label(
 def build_training_dataset(rates) -> Tuple[pd.DataFrame, pd.Series]:
     cfg = Config.section("trading")
     df = build_features(rates)
-    labels = aggressive_label(
-        df,
-        tp_atr=float(cfg.get("label_tp_atr", 0.6)),
-        sl_atr=float(cfg.get("label_sl_atr", 1.2)),
-        lookahead=int(cfg.get("label_lookahead", 30)),
-    )
+
+    use_regime = bool(cfg.get("asymmetric_labels_enabled", False))
+    if use_regime:
+        log.info("Using regime-aware asymmetric labeling (V4)")
+        labels = regime_label(df, lookahead=int(cfg.get("label_lookahead", 12)))
+    else:
+        labels = aggressive_label(
+            df,
+            tp_atr=float(cfg.get("label_tp_atr", 1.6)),
+            sl_atr=float(cfg.get("label_sl_atr", 0.8)),
+            lookahead=int(cfg.get("label_lookahead", 12)),
+        )
     df["label"] = labels
     df = df.dropna(subset=FEATURE_COLUMNS + ["label"])
 
@@ -452,18 +657,14 @@ def build_training_dataset(rates) -> Tuple[pd.DataFrame, pd.Series]:
         idx = pd.to_datetime(df_bal["time"], utc=True)
         X.index = idx
         y.index = idx
+        df_bal.index = idx
+    # 🆕 attach raw OHLC+ATR to X for profit simulation downstream
+    # (เก็บไว้ใน X.attrs เพื่อไม่ทำลาย shape ของ features)
+    try:
+        X.attrs["df_raw"] = df_bal[["open", "high", "low", "close", "atr"]].copy()
+    except Exception:
+        pass
     return X, y
-
-
-def latest_feature_row(rates, closed_index: int = -2) -> pd.Series:
-    """ดึง feature ของแท่งปิดล่าสุด (default -2) สำหรับ inference."""
-    df = build_features(rates)
-    if len(df) < abs(closed_index) + 1:
-        raise ValueError("Not enough bars for inference")
-    row = df.iloc[closed_index]
-    if row[FEATURE_COLUMNS].isna().any():
-        raise ValueError("Feature row has NaN — need more warmup bars")
-    return row[FEATURE_COLUMNS].astype(float)
 
 
 def detect_reversal(df: pd.DataFrame, idx: int, side_to_recover: str,
