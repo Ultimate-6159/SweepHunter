@@ -306,19 +306,38 @@ python run.py bot        # 🚀 เริ่มเทรด!  (หรือ 1_st
 > 🚦 **Acceptance Gate** — โมเดลใหม่ต้อง beat all-time best "quality score" (exp × PF × √net) บน OOS
 > ถ้าแย่ลง → **REJECT** เก็บ model เก่าทำงานต่อ (zero-regression)
 
-### 🚫 Session Blocking + ⚖️ Lot Multiplier
+### 🚫 Session Blocking + 👁️ Watch + ⚖️ Lot Multiplier
+
+เวลาทุกช่อง = **ชั่วโมง broker** (`broker_offset_hours`: 3 → Vantage MT5 ≈ UTC+3) ตรง heatmap / DB หลัง timefix
+
+| ระดับ | พฤติกรรมบอท | เกณฑ์ (`analyze_slots_current.bat`) |
+|---|---|---|
+| **Hard block** | ข้ามแท่ง ไม่เปิดออเดอร์ | n≥8, PF&lt;0.9, net PnL&lt;−$150 |
+| **Watch** | เทรดได้ แต่ lot × `watch_lot_multiplier` (0.5) | 4≤n&lt;8 และ (PF&lt;1.0 หรือ PnL&lt;−$50) |
+| **Hourly lot** | คูณ lot ตาม heatmap (หลัง watch) | จาก `analyze_lot_multipliers.bat` |
+
 ```json
 "session_weighting": {
   "broker_offset_hours": 3,
-  "blocked_slots": [ { "dow": 2, "hours": [19] } ]
+  "blocked_slots": [ { "dow": 2, "hours": [16] } ],
+  "watch_slots": [ { "dow": 1, "hours": [9, 10, 11] } ],
+  "watch_lot_multiplier": 0.5,
+  "_comment_session_hours": "asia/london/overlap/ny_hours_* = ชั่วโมง broker (ชื่อ key legacy)",
+  "asia_hours_utc": [3, 9],
+  "london_hours_utc": [10, 15],
+  "overlap_hours_utc": [16, 19],
+  "ny_hours_utc": [20, 24]
 },
 "hourly_lot_multiplier": {
   "enabled": true,
   "disable_during_recovery": true,
-  "slot_multipliers": [ ... ],   // แยก วัน×ชั่วโมง
-  "multipliers": { ... }          // ชั่วโมงเดียวทุกวัน (fallback)
+  "slot_multipliers": [ { "dow": 0, "hour": 8, "mult": 2.0 } ],
+  "dow_multipliers": { "0": 2.0 },
+  "multipliers": { "13": 2.0 }
 }
 ```
+
+> ลำดับ lookup lot: **slot** (วัน×ชม.) → **dow** → **hour** → default 1.0 — รัน `analyze_lot_multipliers.bat --since-snapshot=14` แล้วยืนยันอัปเดต config
 
 ---
 
@@ -343,7 +362,7 @@ menu.bat        # เมนูรวม: start bot, status, retrain, ราย�
 |---|---|
 | `view_trades.bat` | แดชบอร์ดเทรด HTML (ภาพรวม, รายไม้, heatmap, recovery) |
 | `strategy_report.bat` | รายงานกลยุทธ์ + heatmap (snapshot ≥ 14) |
-| `analyze_slots_current.bat` | วิเคราะห์ช่วงเวลาที่ควร block (PF<0.9, ≥8 ไม้) |
+| `analyze_slots_current.bat` | อัปเดต hard block + watch ใน config (snap≥14) |
 | `analyze_lot_multipliers.bat` | วิเคราะห์ + แนะนำ lot multiplier ราย วัน×ชั่วโมง |
 | `simulate_recovery.bat` | จำลอง recovery worst-case |
 | `db_reliability.bat` | ตรวจความสมบูรณ์ของ DB |

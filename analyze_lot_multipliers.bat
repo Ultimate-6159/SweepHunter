@@ -10,7 +10,7 @@ if exist .python_path.txt (
 )
 
 echo.
-echo === วิเคราะห์ Lot Multiplier วัน x ชั่วโมง (snapshot ^>= 14) ===
+echo === วิเคราะห์ Lot Multiplier แยก วัน / ชม. / วันxชม. (snapshot ^>= 14) ===
 echo.
 echo   ดูรายงานอย่างเดียว (ไม่ถามแก้ config):
 echo     analyze_lot_multipliers.bat --dry-run

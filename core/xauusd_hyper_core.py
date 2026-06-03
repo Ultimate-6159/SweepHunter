@@ -152,6 +152,7 @@ class HyperBot:
         self._cached_balance_ts: float = 0.0
         self._recent_predictions: list = []   # multi-bar confirmation history
         self._last_weekend_warn_ts: float = 0.0  # rate-limit weekend log (ทุก 5 นาที)
+        self._mt5_skew_sec_cache: float | None = None  # tick.time − time.time() (Vantage ~+3h)
         # Initialise retrain counter from model timestamp so restarts don't reset it
         self._trades_at_last_train = self._count_trades_before_model()
 
@@ -262,6 +263,13 @@ class HyperBot:
         else:
             log.info("📂 ไม่มี recovery state เก่า — เริ่มสด")
 
+    def _recovery_brief(self) -> str:
+        """สถานะ recovery สั้นๆ อ่านง่าย"""
+        if self.recovery.consecutive_losses > 0:
+            return "ค้าง $%.0f (%dไม้)" % (
+                self.recovery.cumulative_loss_usd, self.recovery.consecutive_losses)
+        return "ไม่มีหนี้"
+
     # ============================================================ heartbeat
     def _log_heartbeat(self) -> None:
         """Log สถานะแบบสรุปเพื่อบอกว่าบอทยังทำงาน"""
@@ -269,10 +277,10 @@ class HyperBot:
             tick = MT5Connector.get_tick(self.symbol)
             spec = MT5Connector.get_symbol_spec(self.symbol)
         except Exception:
-            log.info("💓 บอทยังทำงาน (เชื่อม MT5 ไม่ได้ชั่วขณะ)")
+            log.info("💓 บอททำงาน (MT5 offline ชั่วคราว)")
             return
         if tick is None:
-            log.info("💓 บอทยังทำงาน (รอ tick %s)", self.symbol)
+            log.info("💓 บอททำงาน (รอ tick %s)", self.symbol)
             return
 
         # countdown ถึงแท่งถัดไป (M1 = 60s, M5 = 300s, etc.)
@@ -282,30 +290,23 @@ class HyperBot:
         live = MT5Connector.positions(symbol=self.symbol, magic=self.magic)
         spread = (tick.ask - tick.bid) / spec.point if spec.point > 0 else 0.0
 
-        # สถานะ recovery
-        if self.recovery.consecutive_losses > 0:
-            rec = "💳 ค้าง $%.2f (เสีย %d ไม้, lot รวม %.3f)" % (
-                self.recovery.cumulative_loss_usd,
-                self.recovery.consecutive_losses,
-                self.recovery.cumulative_losing_volume)
-        else:
-            rec = "✅ ไม่มีหนี้"
-
-        # สถานะ position
         if live:
             p = live[0]
-            side_txt = "BUY" if p.type == 0 else "SELL"
-            pnl_txt = ("+$%.2f" % p.profit) if p.profit >= 0 else ("-$%.2f" % abs(p.profit))
-            pos_txt = "📌 ถือ %s %.2f lot @%.3f (PnL %s)" % (side_txt, p.volume, p.price_open, pnl_txt)
+            side = "BUY" if p.type == 0 else "SELL"
+            pos_txt = "ถือ %s %.2f lot PnL %+.0f" % (side, p.volume, p.profit)
         elif time.time() < self.recovery.halted_until_ts:
             wait = int(self.recovery.halted_until_ts - time.time())
-            pos_txt = "🛑 หยุดเทรด อีก %d วินาที" % wait
+            pos_txt = "หยุดเทรด อีก %d วิ" % wait
         else:
-            pos_txt = "👀 รอสัญญาณ (อีก %ds จะมีแท่งใหม่)" % next_bar
+            pos_txt = "รอแท่งใหม่ %d วิ" % next_bar
 
-        log.info("💓 %s | bid=%.3f ask=%.3f spread=%.0fp | %s | %s",
-                 datetime.now().strftime("%H:%M:%S"), tick.bid, tick.ask, spread,
-                 rec, pos_txt)
+        broker_now = self._current_broker_datetime()
+        off = self._broker_offset_hours()
+        log.info(
+            "💓 broker %s (UTC+%d) | bid %.2f spread %dp | %s | %s",
+            broker_now.strftime("%H:%M:%S"), off,
+            tick.bid, spread, self._recovery_brief(), pos_txt,
+        )
 
     # ============================================================ session weighting
     _DOW_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -313,25 +314,68 @@ class HyperBot:
     def _broker_offset_hours(self) -> int:
         return int(self.cfg_sw.get("broker_offset_hours", 3))
 
+    def _mt5_epoch_skew_sec(self) -> float:
+        """
+        MT5/Vantage: tick.time มักเร็วกว่า UTC epoch จริง ~broker_offset ชม.
+        ใช้ skew นี้ normalize bar/tick → UTC จริง → +offset = broker (UTC+3)
+        สอดคล้องกับ closed_at_utc ใน DB ที่แปลงด้วย +offset เช่นกัน
+        """
+        if self._mt5_skew_sec_cache is not None:
+            return self._mt5_skew_sec_cache
+        skew = 0.0
+        try:
+            tick = MT5Connector.get_tick(self.symbol)
+            if tick and tick.time:
+                skew = float(tick.time) - time.time()
+        except Exception:
+            pass
+        self._mt5_skew_sec_cache = skew
+        off = self._broker_offset_hours()
+        # ตัวอย่าง broker ตอนนี้ (หลัง normalize)
+        try:
+            tick = MT5Connector.get_tick(self.symbol)
+            if tick and tick.time:
+                sample = MT5Connector.broker_datetime_from_mt5_epoch(
+                    tick.time, off, epoch_skew_sec=skew,
+                ).strftime("%H:%M:%S")
+            else:
+                sample = "?"
+        except Exception:
+            sample = "?"
+        log.info("🕐 MT5 skew %+.1fh → broker UTC+%d (ตอนนี้ %s)", skew / 3600.0, off, sample)
+        return skew
+
+    def _epoch_to_broker_datetime(self, ts: int) -> datetime:
+        """MT5 bar/tick epoch → broker UTC+offset (ตรง DB heatmap / Market Watch)."""
+        return MT5Connector.broker_datetime_from_mt5_epoch(
+            ts, self._broker_offset_hours(), epoch_skew_sec=self._mt5_epoch_skew_sec(),
+        )
+
+    def _utc_to_broker_datetime(self, dt: datetime) -> datetime:
+        """Python/DB UTC → เวลา broker."""
+        return MT5Connector.broker_datetime_from_utc(dt, self._broker_offset_hours())
+
     def _utc_to_broker_hour(self, dt: datetime) -> int:
         """แปลง datetime (UTC-aware หรือ naive=UTC) → ชั่วโมง broker 0–23."""
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        else:
-            dt = dt.astimezone(timezone.utc)
-        return (dt.hour + self._broker_offset_hours()) % 24
+        bd = self._utc_to_broker_datetime(dt)
+        return bd.hour
 
     def _current_broker_hour(self) -> int:
-        return self._utc_to_broker_hour(datetime.now(timezone.utc))
+        return self._current_broker_datetime().hour
 
     def _current_broker_datetime(self) -> datetime:
-        """เวลา broker ปัจจุบัน (UTC + broker_offset) — วัน+ชั่วโมงตรง heatmap."""
-        return datetime.now(timezone.utc) + timedelta(hours=self._broker_offset_hours())
+        """เวลา broker ปัจจุบัน — จาก tick MT5 (ตรง server) หรือ fallback UTC+offset."""
+        try:
+            tick = MT5Connector.get_tick(self.symbol)
+            if tick and tick.time:
+                return self._epoch_to_broker_datetime(int(tick.time))
+        except Exception:
+            pass
+        return self._utc_to_broker_datetime(datetime.now(timezone.utc))
 
     def _bar_broker_datetime(self, bar_time: int) -> datetime:
-        """เวลาเปิดแท่ง MT5 (UTC epoch) → เวลา broker (offset จาก config)."""
-        return datetime.fromtimestamp(bar_time, tz=timezone.utc) + timedelta(
-            hours=self._broker_offset_hours())
+        """เวลาเปิดแท่ง MT5 → เวลา broker (ตรง heatmap / blocked_slots)."""
+        return self._epoch_to_broker_datetime(int(bar_time))
 
     def _is_slot_blocked(self, bar_time: int) -> tuple[bool, str]:
         """บล็อกตามวัน+ชั่วโมง broker (จากสถิติ DB) และ/หรือชั่วโมงทุกวัน."""
@@ -365,7 +409,43 @@ class HyperBot:
                 return True, f"hour {hour:02d} (legacy list)"
         return False, ""
 
+    def _is_watch_slot(self, bar_time: int) -> tuple[bool, str]:
+        """ช่อง watch — ลด lot ไม่ข้ามแท่ง (soft block)."""
+        if not self.cfg_sw.get("enabled", True):
+            return False, ""
+        bd = self._bar_broker_datetime(bar_time)
+        dow, hour = bd.weekday(), bd.hour
+        dow_name = self._DOW_NAMES[dow]
+
+        for slot in self.cfg_sw.get("watch_slots", []) or []:
+            try:
+                if int(slot.get("dow", -1)) != dow:
+                    continue
+                hours = [int(h) for h in slot.get("hours", [])]
+                if hour in hours:
+                    return True, f"{dow_name} {hour:02d}:xx (watch)"
+            except (TypeError, ValueError):
+                continue
+        return False, ""
+
+    def _apply_watch_slot_lot_multiplier(self, lot: float, spec, bar_time: int) -> float:
+        """คูณ lot ในช่อง watch (default 0.5) — หลัง hourly mult."""
+        watch, reason = self._is_watch_slot(bar_time)
+        if not watch:
+            return lot
+        mult = float(self.cfg_sw.get("watch_lot_multiplier", 0.5))
+        if abs(mult - 1.0) < 1e-6:
+            return lot
+        new_lot = lot * mult
+        min_lot = float(self.cfg_hl.get("min_lot", spec.volume_min if hasattr(spec, "volume_min") else 0.01))
+        if new_lot < min_lot:
+            new_lot = min_lot
+        new_lot = round(new_lot, 2)
+        log.info("👁️ Watch slot [%s]: lot %.2f → %.2f (×%.2f)", reason, lot, new_lot, mult)
+        return new_lot
+
     def _session_threshold(self, base: float, hour_broker: int) -> float:
+        """ปรับ confidence ตาม session — ช่วงใน config ต้องเป็น **ชั่วโมง broker** (key *_utc เป็น legacy)."""
         if not self.cfg_sw.get("enabled", True):
             return base
 
@@ -375,14 +455,17 @@ class HyperBot:
             except Exception:
                 return False
 
+        def session_range(name: str, default):
+            return self.cfg_sw.get(f"{name}_hours_broker") or self.cfg_sw.get(f"{name}_hours_utc", default)
+
         add = 0.0
-        if in_range(self.cfg_sw.get("overlap_hours_utc", [13, 16])):
+        if in_range(session_range("overlap", [16, 19])):
             add = float(self.cfg_sw.get("overlap_threshold_add", -0.04))
-        elif in_range(self.cfg_sw.get("london_hours_utc", [7, 12])):
+        elif in_range(session_range("london", [10, 15])):
             add = float(self.cfg_sw.get("london_threshold_add", -0.02))
-        elif in_range(self.cfg_sw.get("ny_hours_utc", [17, 21])):
+        elif in_range(session_range("ny", [20, 24])):
             add = float(self.cfg_sw.get("ny_threshold_add", -0.02))
-        elif in_range(self.cfg_sw.get("asia_hours_utc", [0, 6])):
+        elif in_range(session_range("asia", [3, 9])):
             add = float(self.cfg_sw.get("asia_threshold_add", 0.05))
         return max(0.30, min(0.95, base + add))
 
@@ -642,30 +725,31 @@ class HyperBot:
                 if "sell_max" in dir_thr_cfg:
                     max_thr = float(dir_thr_cfg["sell_max"])
 
-        bar_dt = datetime.fromtimestamp(bar_time, tz=timezone.utc)
-        debt_str = ("💳 ค้าง $%.2f (เสียติด %d ไม้)" %
-                    (self.recovery.cumulative_loss_usd, self.recovery.consecutive_losses)
-                    if self.recovery.consecutive_losses > 0 else "✅ ไม่ค้าง")
+        bar_lbl = self._bar_broker_datetime(bar_time).strftime("%H:%M")
+        rec = self._recovery_brief()
         # 🆕 max threshold check — skip overconfident overfit zone
         if pred != 1 and max_thr is not None and conf > max_thr:
-            log.info("⏸️  %s | AI=%s %.1f%% > เพดาน %.1f%% (overfit zone) → ข้าม | %s | atr=%.3f spread=%.0fp",
-                     bar_dt.strftime("%H:%M"), CLASS_NAMES[pred], conf*100, max_thr*100,
-                     debt_str, atr_value, cur_spread)
+            log.info(
+                "⏸️ แท่ง %s broker | AI=%s %.1f%% > เพดาน %.1f%% → ข้าม | %s | spread %dp",
+                bar_lbl, CLASS_NAMES[pred], conf * 100, max_thr * 100, rec, cur_spread,
+            )
             return
         if pred == 1 or conf < thr:
             if pred == 1:
-                # 🤚 AI ตัดสินใจ HOLD — ตลาดไม่มีสัญญาณชัด (อาจ confidence สูงก็ได้)
-                log.info("⏸️  %s | AI=HOLD %.1f%% (รอจังหวะ ไม่มีสัญญาณชัด) → ข้าม | %s | atr=%.3f spread=%.0fp",
-                         bar_dt.strftime("%H:%M"), conf*100, debt_str, atr_value, cur_spread)
+                log.info(
+                    "⏸️ แท่ง %s broker | AI=HOLD %.1f%% → ข้าม | %s | spread %dp",
+                    bar_lbl, conf * 100, rec, cur_spread,
+                )
             else:
-                # 📉 AI predict BUY/SELL แต่มั่นใจไม่พอ
-                log.info("⏸️  %s | AI=%s %.1f%% < ขั้นต่ำ %.1f%% → ข้าม | %s | atr=%.3f spread=%.0fp",
-                         bar_dt.strftime("%H:%M"), CLASS_NAMES[pred], conf*100, thr*100,
-                         debt_str, atr_value, cur_spread)
+                log.info(
+                    "⏸️ แท่ง %s broker | AI=%s %.1f%% < เกณฑ์ %.1f%% → ข้าม | %s | spread %dp",
+                    bar_lbl, CLASS_NAMES[pred], conf * 100, thr * 100, rec, cur_spread,
+                )
             return
-        log.info("🎯 %s | AI=%s %.1f%% ≥ %.1f%% → จะเทรด | %s | atr=%.3f spread=%.0fp",
-                 bar_dt.strftime("%H:%M"), CLASS_NAMES[pred], conf*100, thr*100,
-                 debt_str, atr_value, cur_spread)
+        log.info(
+            "🎯 แท่ง %s broker | AI=%s %.1f%% ≥ เกณฑ์ %.1f%% → เทรด | %s | atr %.2f spread %dp",
+            bar_lbl, CLASS_NAMES[pred], conf * 100, thr * 100, rec, atr_value, cur_spread,
+        )
 
         # 🆕 🅐 Direction-Flip Lock — กันเคส "AI ส่งทิศเดียวซ้ำตอน trend แรง" (catching rocket)
         # ถ้าเสีย N ไม้ติดทิศเดียว → block ทิศนั้น cooldown_minutes
@@ -830,6 +914,7 @@ class HyperBot:
         base_lot = lot
         # 🆕 Hourly lot multiplier — เพิ่ม lot ในชั่วโมงดี ลดในชั่วโมงแย่
         lot = self._apply_hourly_lot_multiplier(lot, spec)
+        lot = self._apply_watch_slot_lot_multiplier(lot, spec, bar_time)
         # 🆕 Confidence-tier lot multiplier — บูสต์ตอน AI มั่นใจสูง
         lot = self._apply_confidence_lot_multiplier(lot, spec, conf)
         # safety: clamp อย่าให้เกิน max_total_multiplier × base_lot
@@ -849,11 +934,13 @@ class HyperBot:
         """
         ลำดับ lookup:
           1) slot_multipliers — แยกวัน×ชั่วโมง (ตรง heatmap / blocked_slots)
-          2) multipliers — ชั่วโมงเดียวทุกวัน (legacy)
-          3) default
+          2) dow_multipliers — รายวัน (fallback ทุกชม. ในวันนั้น)
+          3) multipliers — รายชั่วโมง (fallback ทุกวัน)
+          4) default
         """
         default = float(self.cfg_hl.get("default", 1.0))
         hour_mults = self.cfg_hl.get("multipliers", {}) or {}
+        dow_mults = self.cfg_hl.get("dow_multipliers", {}) or {}
         slot_cfg = self.cfg_hl.get("slot_multipliers")
 
         if slot_cfg:
@@ -869,6 +956,8 @@ class HyperBot:
                     except (TypeError, ValueError):
                         continue
 
+        if str(dow) in dow_mults:
+            return float(dow_mults[str(dow)]), "dow"
         if str(hour) in hour_mults:
             return float(hour_mults[str(hour)]), "hour"
         return default, "default"
@@ -878,7 +967,8 @@ class HyperBot:
         """
         ปรับ lot ตามช่วง broker ปัจจุบัน:
           - slot_multipliers: แยกวัน+ชั่วโมง (Mon=0 … Sun=6, ชม. 0–23)
-          - multipliers: ชั่วโมงเดียวทุกวัน (fallback ถ้าไม่มี slot)
+          - dow_multipliers: รายวัน (fallback ถ้าไม่มี slot)
+          - multipliers: รายชั่วโมง (fallback ถ้าไม่มี slot/dow)
         """
         if not self.cfg_hl.get("enabled", False):
             return lot
@@ -895,11 +985,9 @@ class HyperBot:
             new_lot = min_lot
         new_lot = round(new_lot, 2)
         emoji = "🚀" if mult > 1.2 else ("🐢" if mult < 0.8 else "➖")
-        off = self._broker_offset_hours()
-        dow_name = self._DOW_NAMES[dow]
         log.info(
-            "%s Lot mult [%s]: %s %02d:xx broker (UTC%+d, %s) × %.2f → lot %.2f → %.2f",
-            emoji, src, dow_name, h, off, f"{dow}_{h}", mult, lot, new_lot,
+            "%s lot ×%.1f [%s] %s %02d:00 broker → %.2f → %.2f",
+            emoji, mult, src, self._DOW_NAMES[dow], h, lot, new_lot,
         )
         return new_lot
 
@@ -1261,7 +1349,9 @@ class HyperBot:
             self.db.update_decision(
                 row["id"], status=status, pnl=pnl,
                 close_price=float(close_deal.price),
-                closed_at_utc=datetime.fromtimestamp(close_deal.time, tz=timezone.utc).isoformat(),
+                closed_at_utc=MT5Connector.mt5_epoch_to_utc(
+                    close_deal.time, epoch_skew_sec=self._mt5_epoch_skew_sec(),
+                ).isoformat(),
             )
             emoji = "💚" if pnl > 0 else "💔"
             sign = "+" if pnl > 0 else ""

@@ -194,6 +194,36 @@ class MT5Connector:
         return mt5.symbol_info_tick(cls.resolve_symbol(symbol))
 
     @classmethod
+    def broker_datetime_from_mt5_epoch(
+        cls, ts: int | float, offset_hours: int, *, epoch_skew_sec: float = 0.0,
+    ):
+        """
+        MT5 bar/tick epoch → เวลา broker (UTC+offset) ตรง Market Watch / heatmap DB.
+
+        1) ลบ epoch_skew (วัดจาก tick.time − time.time() ตอนเริ่มบอท)
+        2) ได้ UTC จริง → บวก broker_offset_hours (= UTC+3)
+        """
+        from datetime import datetime, timezone, timedelta
+        real_utc = datetime.fromtimestamp(float(ts) - float(epoch_skew_sec), tz=timezone.utc)
+        return real_utc + timedelta(hours=int(offset_hours))
+
+    @classmethod
+    def mt5_epoch_to_utc(cls, ts: int | float, *, epoch_skew_sec: float = 0.0):
+        """MT5 deal/bar/tick epoch → UTC จริง (ลบ skew ก่อน fromtimestamp)."""
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(float(ts) - float(epoch_skew_sec), tz=timezone.utc)
+
+    @classmethod
+    def broker_datetime_from_utc(cls, dt, offset_hours: int):
+        """Python/DB UTC (ISO) → เวลา broker — ใช้กับ closed_at_utc ใน SQLite."""
+        from datetime import datetime, timezone, timedelta
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt + timedelta(hours=int(offset_hours))
+
+    @classmethod
     def copy_ticks_recent(cls, symbol: str, seconds_back: int = 60, count_max: int = 5000):
         """
         ดึง tick ล่าสุด N วินาทีย้อนหลัง (สำหรับ tick-level confirmation).

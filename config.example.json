@@ -35,6 +35,8 @@
   "session_weighting": {
     "enabled": true,
     "broker_offset_hours": 3,
+    "_comment_broker_time": "DB closed_at_utc ใช้ +offset | MT5 bar/tick ใช้ mode server_clock (ลบ offset) — ตรงเวลา Vantage MT5",
+    "mt5_time_mode": "auto",
     "blocked_hours_broker": [],
     "blocked_slots": [
       {"dow": 0, "hours": [0, 6, 8, 9, 11, 15, 18]},
@@ -48,10 +50,13 @@
     "london_threshold_add": 0.0,
     "ny_threshold_add": 0.0,
     "overlap_threshold_add": -0.02,
-    "asia_hours_utc": [0, 6],
-    "london_hours_utc": [7, 12],
-    "overlap_hours_utc": [13, 16],
-    "ny_hours_utc": [17, 21]
+    "_comment_session_hours": "ค่า = ชั่วโมง broker (ชื่อ key *_utc legacy) | offset 3: Asia 03-09, London 10-15, Overlap 16-19, NY 20-24",
+    "asia_hours_utc": [3, 9],
+    "london_hours_utc": [10, 15],
+    "overlap_hours_utc": [16, 19],
+    "ny_hours_utc": [20, 24],
+    "watch_slots": [],
+    "watch_lot_multiplier": 0.5
   },
   "commission": {
     "per_lot_round_trip_usd": 7.0,

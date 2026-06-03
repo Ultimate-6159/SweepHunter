@@ -15,19 +15,23 @@ def get_logger(name: str = "sweephunter") -> logging.Logger:
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
-    fmt = logging.Formatter(
+    file_fmt = logging.Formatter(
         "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    console_fmt = logging.Formatter(
+        "%(asctime)s | %(message)s",
+        datefmt="%H:%M:%S",
     )
 
     fh = RotatingFileHandler(
         log_path(f"{name}.log"), maxBytes=5_000_000, backupCount=5, encoding="utf-8"
     )
-    fh.setFormatter(fmt)
+    fh.setFormatter(file_fmt)
     logger.addHandler(fh)
 
     sh = logging.StreamHandler()
-    sh.setFormatter(fmt)
+    sh.setFormatter(console_fmt)
     logger.addHandler(sh)
 
     _LOGGERS[name] = logger

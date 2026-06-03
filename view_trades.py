@@ -13,6 +13,13 @@ import webbrowser
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+from core.report_broker import (
+    HM_NOW_CSS,
+    HM_NOW_LEGEND,
+    broker_slot_from_closed_at,
+    now_slot_label,
+)
+
 DB = "data/db/hyper_trades.sqlite"
 OUT = "data/trades_dashboard.html"
 BROKER_OFFSET = 3
@@ -23,15 +30,7 @@ DEFAULT_SINCE_SNAPSHOT = 14
 
 
 def broker_slot(closed_at: str) -> tuple[int, int] | None:
-    """UTC closed_at → (weekday Mon=0, broker hour 0–23) — ตรงกับบอท."""
-    if not closed_at:
-        return None
-    s = str(closed_at).replace("Z", "+00:00")
-    dt = datetime.fromisoformat(s)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    bd = dt.astimezone(timezone.utc) + timedelta(hours=BROKER_OFFSET)
-    return bd.weekday(), bd.hour
+    return broker_slot_from_closed_at(closed_at, BROKER_OFFSET)
 
 
 SINCE_SNAPSHOT = DEFAULT_SINCE_SNAPSHOT
@@ -279,6 +278,7 @@ if trade_dates:
 
 now_broker = datetime.now(timezone.utc) + timedelta(hours=BROKER_OFFSET)
 now_slot = {"dow": now_broker.weekday(), "hour": now_broker.hour}
+now_lbl = now_slot_label(BROKER_OFFSET)
 
 recent_slot_trades = []
 for t in reversed(trades[-15:]):
@@ -351,6 +351,7 @@ select{{background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6p
 .chart-wrap{{position:relative;height:260px}}
 #heatmap-tbl td, #heatmap-tbl th{{padding:0}}
 #heatmap-tbl td:hover{{transform:scale(1.2);z-index:10;position:relative;box-shadow:0 0 0 2px #e2e8f0}}
+{HM_NOW_CSS}
 .split{{display:flex;gap:12px;flex-wrap:wrap}}
 .split>div{{flex:1;min-width:280px}}
 .pager{{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:#64748b}}
@@ -499,7 +500,8 @@ select{{background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6p
   </div>
   <div class="panel">
     <h2>🗓️ Heatmap วัน × ชั่วโมง</h2>
-    <p class="desc">{era_label}{date_range} · ตอนนี้ broker = <b>{DOW[now_slot['dow']]} {now_slot['hour']:02d}:xx</b> · รัน view_trades.bat แล้ว Ctrl+F5 ถ้าข้อมูลเก่า</p>
+    <p class="desc">{era_label}{date_range} · ตอนนี้ broker = <b>{now_lbl}</b> · รัน view_trades.bat แล้ว Ctrl+F5 ถ้าข้อมูลเก่า</p>
+    <p class="desc">{HM_NOW_LEGEND} — กรอบฟ้า = ชั่วโมงปัจจุบัน · กรอบทอง NOW = ช่องวัน×ชม. ที่บอทอยู่ตอนนี้</p>
     <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:11px">
       <span style="color:#94a3b8">สี = PF:</span>
       <span style="background:#14532d;padding:3px 10px;border-radius:4px;color:#4ade80;font-weight:600">PF &gt; 1.5 ดี</span>
@@ -727,9 +729,10 @@ function buildHeatmap() {{
       const d = HM[key];
       const blocked = isBlocked(dow, h);
       const isLatest = LATEST_TRADE && LATEST_TRADE.dow === dow && LATEST_TRADE.hour === h;
+      const isNow = dow === NOW_SLOT.dow && h === NOW_SLOT.hour;
       const nowCol = h === NOW_SLOT.hour ? ' hm-now-col' : '';
       let style = 'width:42px;height:36px;text-align:center;vertical-align:middle;border-radius:3px;cursor:default;';
-      let cls = nowCol + (isLatest ? ' hm-latest' : '');
+      let cls = nowCol + (isLatest ? ' hm-latest' : '') + (isNow ? ' hm-now-cell' : '');
 
       if (d && d.t > 0) {{
         const c = d.pnl >= 0 ? pfColor(Math.max(d.pf, 1.01)) : pfColor(Math.min(d.pf, 0.99));

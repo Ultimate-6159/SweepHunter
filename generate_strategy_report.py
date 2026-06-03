@@ -16,7 +16,16 @@ import sqlite3
 import sys
 import webbrowser
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+from core.report_broker import (
+    HM_NOW_CSS,
+    HM_NOW_LEGEND,
+    broker_slot_from_closed_at,
+    hm_cell_classes,
+    now_slot,
+    now_slot_label,
+)
 from pathlib import Path
 
 try:
@@ -173,13 +182,14 @@ def main() -> None:
     trade_dates: set = set()
 
     for r in rows:
-        dt = datetime.fromisoformat(str(r["closed_at_utc"]))
+        key = broker_slot_from_closed_at(str(r["closed_at_utc"]), broker_off)
+        if key is None:
+            continue
+        dow, bh = key
+        dt = datetime.fromisoformat(str(r["closed_at_utc"]).replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        dt = dt.astimezone(timezone.utc)
         trade_dates.add(dt.date())
-        bh = (dt.hour + broker_off) % 24
-        dow = dt.weekday()
         pnl = float(r["pnl"])
         slot[(dow, bh)]["t"] += 1
         slot[(dow, bh)]["pnl"] += pnl
@@ -259,8 +269,11 @@ def main() -> None:
     con.close()
 
     # ---------- heatmap HTML ----------
+    cur_dow, cur_h = now_slot(broker_off)
+    now_lbl = now_slot_label(broker_off)
     hm_rows = ""
     for dow in range(7):
+        row_cls = "hm-now-row" if dow == cur_dow else ""
         cells = f"<th class='dow'>{DOW_NAMES[dow]}</th>"
         for h in range(24):
             s = slot[(dow, h)]
@@ -269,6 +282,7 @@ def main() -> None:
             wr = (s["w"] / n * 100) if n else 0
             blk, blk_type = is_blocked(dow, h, cfg_sw)
             cls = cell_class(pnl, n, pf, blk)
+            cls += " " + hm_cell_classes(dow, h, cur_dow, cur_h)
             if blk:
                 lbl = "ทุกวัน" if blk_type == "every day" else DOW_NAMES[dow]
                 badge = f"<span class='badge' title='{blk_type}'>BLOCK<br><small>{lbl}</small></span>"
@@ -285,11 +299,12 @@ def main() -> None:
                 f"PF {pf:.2f} | ${pnl:+.2f}" + (f" | blocked ({blk_type})" if blk else "")
             )
             cells += f"<td class='{cls}' title='{title}'>{inner}</td>"
-        hm_rows += f"<tr>{cells}</tr>"
+        hm_rows += f"<tr class='{row_cls}'>{cells}</tr>"
 
     # hour summary row
     hour_header = "<tr><th>Hour</th>" + "".join(
-        f"<th>{h:02d}</th>" for h in range(24)
+        f"<th class='{hm_cell_classes(None, h, cur_dow, cur_h, col_only=True)}'>{h:02d}</th>"
+        for h in range(24)
     ) + "</tr>"
 
     # suggested blocks (same rule as analyze_slots.py)
@@ -427,6 +442,7 @@ tr:hover td {{ background: #273549; }}
 .hm-cell.blocked {{ outline: 2px solid #fbbf24; background: #1c1917 !important; }}
 .hm-cell .pnl {{ font-size: 10px; font-weight: 700; }}
 .hm-cell .meta {{ font-size: 9px; color: #94a3b8; }}
+{HM_NOW_CSS}
 .badge {{ display: block; font-size: 8px; background: #fbbf24; color: #1c1917; border-radius: 3px; margin-bottom: 2px; font-weight: 700; }}
 .legend {{ display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: #94a3b8; margin-bottom: 10px; }}
 .legend span {{ display: inline-flex; align-items: center; gap: 6px; }}
@@ -493,8 +509,9 @@ footer {{ text-align: center; color: #475569; font-size: 11px; padding: 20px; }}
       <span><i class="swatch" style="background:#713f12"></i> watch (n≥{MIN_TRADES_WATCH}, PF&lt;{PF_WATCH})</span>
       <span><i class="swatch" style="background:#422006"></i> ขาดทุน sample น้อย (ยังไม่ block)</span>
       <span><i class="swatch" style="outline:2px solid #fbbf24;background:#1c1917"></i> BLOCK ใน config</span>
+      {HM_NOW_LEGEND}
     </div>
-    <p class="note">เวลา = broker (UTC+{broker_off}). ข้อมูล = {era_label}{date_range}.
+    <p class="note">เวลา = broker (UTC+{broker_off}). <b>ตอนนี้: {now_lbl}</b> · ข้อมูล = {era_label}{date_range}.
     สีแดง = เกณฑ์เดียวกับ <code>analyze_slots_current.bat</code> (≥{MIN_TRADES_BLOCK} ไม้ + PF&lt;{PF_BLOCK}).
     ช่องแดงใน heatmap เก่า (1–3 ไม้) ไม่ใช่เกณฑ์ block — รอ sample ก่อน.</p>
     <div class="hm-wrap">

@@ -12,6 +12,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from collections import defaultdict
 
+from core.report_broker import now_slot_label
+
 try: sys.stdout.reconfigure(encoding="utf-8")
 except Exception: pass
 
@@ -246,6 +248,7 @@ if equity:
     </svg>"""
 
 ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+broker_lbl = now_slot_label()
 generated = datetime.now().strftime("%Y%m%d_%H%M%S")
 net_color = "#10b981" if net >= 0 else "#ef4444"
 wr_color = "#10b981" if wr >= 50 else ("#f59e0b" if wr >= 45 else "#ef4444")
@@ -286,7 +289,7 @@ footer {{ text-align: center; color: #94a3b8; font-size: 12px; margin-top: 30px;
 <div class="container">
   <header>
     <h1>🏆 SweepHunter Trading Report</h1>
-    <div class="sub">Generated: {ts}  •  Source: hyper_trades.sqlite</div>
+    <div class="sub">Generated: {ts}  •  Broker now: {broker_lbl}  •  Source: hyper_trades.sqlite</div>
   </header>
 
   <div class="grid">
